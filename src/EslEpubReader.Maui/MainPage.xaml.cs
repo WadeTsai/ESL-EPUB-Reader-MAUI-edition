@@ -545,13 +545,22 @@ public partial class MainPage : ContentPage
             css.Append("img, svg { opacity: 0.85; }\n");
         }
 
-        // JSON-encode the CSS so it embeds safely as a JS string literal
-        // (newlines become \n escapes and survive the one-line flattening).
-        string cssLiteral = JsonSerializer.Serialize(css.ToString());
+        // TRANSPORT ROBUSTNESS — the CSS travels as BASE64, decoded in the
+        // page (the classic UTF-8-safe atob incantation). MAUI's
+        // EvaluateJavaScriptAsync re-escapes/evals scripts on some
+        // platforms, which corrupted embedded string escapes (a JSON "\n"
+        // became a raw newline inside a JS literal = silent SyntaxError and
+        // no styling). Base64's alphabet is inert through every escaping
+        // layer. createElementNS + the documentElement fallback keep the
+        // injection working across the wildly varying XHTML strictness of
+        // real-world ePubs.
+        string cssB64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(css.ToString()));
         await RunJsAsync(
-            $"(function(){{ var s=document.getElementById('esl-style'); " +
-            $"if(!s){{ s=document.createElement('style'); s.id='esl-style'; document.head.appendChild(s); }} " +
-            $"s.textContent = {cssLiteral}; }})();");
+            $"(function(){{ try {{ var s=document.getElementById('esl-style'); " +
+            $"if(!s){{ s=document.createElementNS('http://www.w3.org/1999/xhtml','style'); s.id='esl-style'; " +
+            $"(document.head || document.documentElement).appendChild(s); }} " +
+            $"s.textContent = decodeURIComponent(escape(window.atob('{cssB64}'))); " +
+            $"return 'S-OK'; }} catch(e) {{ return 'S-ERR:'+String(e); }} }})();");
     }
 
     // ========================================================== toolbar events
@@ -593,21 +602,69 @@ public partial class MainPage : ContentPage
         _settings.Save();
     }
 
-    private async void DualPageCheck_Changed(object? sender, CheckedChangedEventArgs e)
+    // Toggle-button states (visuals painted by UpdateToggleVisuals). MAUI's
+    // CheckBoxes were replaced with these compact buttons — the wide native
+    // checkboxes pushed the rest of the toolbar out of view.
+    private bool _readAloud = true;
+    private bool _chaptersVisible = true;
+    private bool _dictVisible = true;
+
+    private async void DualPageBtn_Clicked(object? sender, EventArgs e)
     {
-        _dualPage = e.Value;
+        _dualPage = !_dualPage;
+        UpdateToggleVisuals();
         await ApplyReaderStyleAsync();
+    }
+
+    private void ReadAloudBtn_Clicked(object? sender, EventArgs e)
+    {
+        _readAloud = !_readAloud;
+        if (!_readAloud) _ttsCts?.Cancel();   // stop any speech immediately
+        UpdateToggleVisuals();
+    }
+
+    private void ChaptersBtn_Clicked(object? sender, EventArgs e)
+    {
+        _chaptersVisible = !_chaptersVisible;
+        ApplyPanelVisibility();
+    }
+
+    private void DictBtn_Clicked(object? sender, EventArgs e)
+    {
+        _dictVisible = !_dictVisible;
+        ApplyPanelVisibility();
     }
 
     /// <summary>Hide/unhide the side panels by zeroing their grid columns —
     /// the star-sized reader column absorbs the space, and the injected
     /// resize handler re-aligns dual-page mode to whole pairs.</summary>
-    private void PanelCheck_Changed(object? sender, CheckedChangedEventArgs e)
+    private void ApplyPanelVisibility()
     {
-        ChaptersPanel.IsVisible = ChaptersCheck.IsChecked;
-        ContentGrid.ColumnDefinitions[0].Width = ChaptersCheck.IsChecked ? new GridLength(240) : new GridLength(0);
-        DictPanel.IsVisible = DictCheck.IsChecked;
-        ContentGrid.ColumnDefinitions[2].Width = DictCheck.IsChecked ? new GridLength(380) : new GridLength(0);
+        ChaptersPanel.IsVisible = _chaptersVisible;
+        ContentGrid.ColumnDefinitions[0].Width = _chaptersVisible ? new GridLength(240) : new GridLength(0);
+        DictPanel.IsVisible = _dictVisible;
+        ContentGrid.ColumnDefinitions[2].Width = _dictVisible ? new GridLength(380) : new GridLength(0);
+        UpdateToggleVisuals();
+    }
+
+    /// <summary>Paint the four toggle buttons: accent background = ON,
+    /// subtle neutral = OFF (recomputed on theme change too).</summary>
+    private void UpdateToggleVisuals()
+    {
+        Color onBg = Color.FromArgb("#0F6CBD");
+        Color offBg = _dark ? Color.FromArgb("#3A3A3A") : Color.FromArgb("#E4E4E4");
+        Color onText = Colors.White;
+        Color offText = _dark ? Colors.White : Colors.Black;
+
+        void Paint(Button b, bool on)
+        {
+            b.BackgroundColor = on ? onBg : offBg;
+            b.TextColor = on ? onText : offText;
+        }
+        Paint(DualPageBtn, _dualPage);
+        Paint(ReadAloudBtn, _readAloud);
+        Paint(ChaptersBtn, _chaptersVisible);
+        Paint(DictBtn, _dictVisible);
     }
 
     private async void ThemeBtn_Clicked(object? sender, EventArgs e)
@@ -623,6 +680,7 @@ public partial class MainPage : ContentPage
     {
         Application.Current!.UserAppTheme = _dark ? AppTheme.Dark : AppTheme.Light;
         ThemeBtn.Text = _dark ? "☀️" : "🌙";   // shows the theme you'd switch TO
+        UpdateToggleVisuals();                  // toggle colors are theme-aware
     }
 
     // ==================================================== language selection
@@ -696,7 +754,7 @@ public partial class MainPage : ContentPage
             BindableLayout.SetItemsSource(ChineseList, null);
         });
 
-        if (speakAloud && ReadAloudCheck.IsChecked)
+        if (speakAloud && _readAloud)
             _ = SpeakAsync(term);
 
         try
