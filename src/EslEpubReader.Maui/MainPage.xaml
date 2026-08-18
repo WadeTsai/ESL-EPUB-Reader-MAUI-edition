@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<!--
+  MainPage.xaml — the reader screen, a direct MAUI port of the WinUI layout:
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │ TOOLBAR: open · nav · zoom · font/spacing/margins · toggles  │
+  ├───────────────┬───────────────────────────┬──────────────────┤
+  │ CHAPTERS      │  READER (WebView)         │ DICTIONARY panel │
+  ├───────────────┴───────────────────────────┴──────────────────┤
+  │ STATUS                                                       │
+  └──────────────────────────────────────────────────────────────┘
+
+  MAUI-specific notes:
+  * Pickers get their ItemsSource in code (value objects with a Display
+    property); CheckBoxes replace the WinUI ToggleButtons.
+  * Panel hide/unhide works by zeroing the content grid's column widths
+    from code (MAUI has no GridSplitter, so widths are fixed).
+  * Every color is an AppThemeBinding pair, so the theme button restyles
+    the whole page live.
+-->
+<ContentPage
+    x:Class="EslEpubReader.MainPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+    xmlns:models="clr-namespace:EslEpubReader.Models"
+    BackgroundColor="{AppThemeBinding Light=#F3F3F3, Dark=#1C1C1C}">
+
+    <Grid RowDefinitions="Auto,*,Auto">
+
+        <!-- ═════════════════════════ TOOLBAR ═════════════════════════ -->
+        <ScrollView Grid.Row="0" Orientation="Horizontal">
+            <HorizontalStackLayout Padding="10,6" Spacing="8">
+                <Button x:Name="OpenBtn" Text="Open ePub" Clicked="OpenBtn_Clicked"/>
+                <Button x:Name="PrevBtn" Text="◀" Clicked="PrevBtn_Clicked" IsEnabled="False"/>
+                <Button x:Name="NextBtn" Text="▶" Clicked="NextBtn_Clicked" IsEnabled="False"/>
+
+                <Button x:Name="ZoomOutBtn" Text="−" Clicked="ZoomOutBtn_Clicked"/>
+                <Label x:Name="ZoomLabel" Text="100%" VerticalOptions="Center" WidthRequest="48"
+                       HorizontalTextAlignment="Center"/>
+                <Button x:Name="ZoomInBtn" Text="+" Clicked="ZoomInBtn_Clicked"/>
+
+                <!-- Reading font / line spacing / page margins: ItemsSource
+                     is assigned in code; empty value = book default. -->
+                <Picker x:Name="FontPicker" WidthRequest="160" Title="Font"
+                        SelectedIndexChanged="StylePicker_Changed"/>
+                <Picker x:Name="SpacingPicker" WidthRequest="140" Title="Spacing"
+                        SelectedIndexChanged="StylePicker_Changed"/>
+                <Picker x:Name="MarginPicker" WidthRequest="170" Title="Margins"
+                        SelectedIndexChanged="StylePicker_Changed"/>
+
+                <HorizontalStackLayout Spacing="2">
+                    <CheckBox x:Name="DualPageCheck" CheckedChanged="DualPageCheck_Changed"/>
+                    <Label Text="Dual page" VerticalOptions="Center"/>
+                </HorizontalStackLayout>
+                <HorizontalStackLayout Spacing="2">
+                    <CheckBox x:Name="ReadAloudCheck" IsChecked="True"/>
+                    <Label Text="Read aloud" VerticalOptions="Center"/>
+                </HorizontalStackLayout>
+                <HorizontalStackLayout Spacing="2">
+                    <CheckBox x:Name="ChaptersCheck" IsChecked="True" CheckedChanged="PanelCheck_Changed"/>
+                    <Label Text="Chapters" VerticalOptions="Center"/>
+                </HorizontalStackLayout>
+                <HorizontalStackLayout Spacing="2">
+                    <CheckBox x:Name="DictCheck" IsChecked="True" CheckedChanged="PanelCheck_Changed"/>
+                    <Label Text="Dictionary" VerticalOptions="Center"/>
+                </HorizontalStackLayout>
+
+                <Button x:Name="ThemeBtn" Text="🌙" Clicked="ThemeBtn_Clicked"/>
+                <Label x:Name="BookTitleLabel" Text="Open an .epub file to start reading"
+                       VerticalOptions="Center" FontAttributes="Bold" LineBreakMode="TailTruncation"/>
+            </HorizontalStackLayout>
+        </ScrollView>
+
+        <!-- ═════════════════════════ CONTENT ═════════════════════════ -->
+        <Grid x:Name="ContentGrid" Grid.Row="1" ColumnDefinitions="240,*,380" ColumnSpacing="8"
+              Padding="8,0">
+
+            <!-- Chapters -->
+            <Border x:Name="ChaptersPanel" Grid.Column="0" StrokeThickness="1" Padding="0"
+                    Stroke="{AppThemeBinding Light=#DDDDDD, Dark=#3A3A3A}"
+                    BackgroundColor="{AppThemeBinding Light=#FFFFFF, Dark=#252525}">
+                <Grid RowDefinitions="Auto,*">
+                    <Label Text="Chapters" FontAttributes="Bold" Padding="12,10,12,6"/>
+                    <CollectionView x:Name="ChapterList" Grid.Row="1" SelectionMode="Single"
+                                    SelectionChanged="ChapterList_SelectionChanged">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate x:DataType="models:EpubChapter">
+                                <Label Text="{Binding Title}" Padding="12,8" LineBreakMode="TailTruncation"/>
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+                </Grid>
+            </Border>
+
+            <!-- Reader: MAUI WebView (WebView2 on Windows, WKWebView on Mac).
+                 Navigating intercepts the JS→native bridge messages; Navigated
+                 injects the selection watcher + reader stylesheet. -->
+            <Border Grid.Column="1" StrokeThickness="1" Padding="1"
+                    Stroke="{AppThemeBinding Light=#DDDDDD, Dark=#3A3A3A}"
+                    BackgroundColor="{AppThemeBinding Light=#FFFFFF, Dark=#1E1E1E}">
+                <WebView x:Name="ReaderWebView"
+                         Navigating="ReaderWebView_Navigating"
+                         Navigated="ReaderWebView_Navigated"/>
+            </Border>
+
+            <!-- Dictionary panel -->
+            <Border x:Name="DictPanel" Grid.Column="2" StrokeThickness="1"
+                    Stroke="{AppThemeBinding Light=#DDDDDD, Dark=#3A3A3A}"
+                    BackgroundColor="{AppThemeBinding Light=#FFFFFF, Dark=#252525}">
+                <Grid RowDefinitions="Auto,*,Auto" Padding="12,8">
+
+                    <!-- Header: language picker + looked-up term + speak. -->
+                    <VerticalStackLayout Grid.Row="0" Spacing="2">
+                        <Grid ColumnDefinitions="*,Auto">
+                            <Label Text="DICTIONARY" FontSize="11" CharacterSpacing="2"
+                                   TextColor="{AppThemeBinding Light=#888888, Dark=#999999}"
+                                   VerticalOptions="Center"/>
+                            <Picker x:Name="LanguagePicker" Grid.Column="1" WidthRequest="190"
+                                    FontSize="12" SelectedIndexChanged="LanguagePicker_Changed"/>
+                        </Grid>
+                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                            <Label x:Name="TermLabel" Text="Select a word or phrase in the book"
+                                   FontSize="22" FontAttributes="Bold" LineBreakMode="WordWrap"/>
+                            <Button x:Name="SpeakBtn" Grid.Column="1" Text="🔊" IsEnabled="False"
+                                    Clicked="SpeakBtn_Clicked" VerticalOptions="Start"/>
+                        </Grid>
+                        <Label x:Name="PhoneticLabel" FontAttributes="Italic"
+                               TextColor="{AppThemeBinding Light={StaticResource AccentColor}, Dark={StaticResource AccentColorDark}}"/>
+                    </VerticalStackLayout>
+
+                    <!-- Results: the three lookup sections. -->
+                    <ScrollView Grid.Row="1">
+                        <VerticalStackLayout Spacing="6" Padding="0,6">
+
+                            <Label x:Name="TranslateHeader" Text="Bing Translator (繁體中文)" FontAttributes="Bold"/>
+                            <Label x:Name="TranslationStatusLabel" IsVisible="False" FontSize="13"
+                                   TextColor="{AppThemeBinding Light=#777777, Dark=#AAAAAA}"/>
+                            <Label x:Name="TranslationLabel" FontSize="17" LineBreakMode="WordWrap"/>
+
+                            <Label Text="English – English" FontAttributes="Bold" Margin="0,8,0,0"/>
+                            <Label x:Name="EnglishStatusLabel" IsVisible="False" FontSize="13"
+                                   TextColor="{AppThemeBinding Light=#777777, Dark=#AAAAAA}"/>
+                            <VerticalStackLayout x:Name="EnglishList" Spacing="8">
+                                <BindableLayout.ItemTemplate>
+                                    <DataTemplate x:DataType="models:EnglishSense">
+                                        <VerticalStackLayout Spacing="1">
+                                            <Label Text="{Binding PartOfSpeech}" FontSize="12" FontAttributes="Italic"
+                                                   TextColor="{AppThemeBinding Light={StaticResource AccentColor}, Dark={StaticResource AccentColorDark}}"/>
+                                            <Label Text="{Binding Definition}" LineBreakMode="WordWrap"/>
+                                            <Label Text="{Binding Example}" FontSize="13" FontAttributes="Italic"
+                                                   IsVisible="{Binding HasExample}" LineBreakMode="WordWrap"
+                                                   TextColor="{AppThemeBinding Light=#666666, Dark=#AAAAAA}"/>
+                                            <Label Text="{Binding Synonyms}" FontSize="13"
+                                                   IsVisible="{Binding HasSynonyms}" LineBreakMode="WordWrap"
+                                                   TextColor="{AppThemeBinding Light=#888888, Dark=#999999}"/>
+                                        </VerticalStackLayout>
+                                    </DataTemplate>
+                                </BindableLayout.ItemTemplate>
+                            </VerticalStackLayout>
+
+                            <Label x:Name="DictHeader" Text="Bing Dict (繁體中文)" FontAttributes="Bold" Margin="0,8,0,0"/>
+                            <Label x:Name="ChineseStatusLabel" IsVisible="False" FontSize="13"
+                                   TextColor="{AppThemeBinding Light=#777777, Dark=#AAAAAA}"/>
+                            <VerticalStackLayout x:Name="ChineseList" Spacing="8">
+                                <BindableLayout.ItemTemplate>
+                                    <DataTemplate x:DataType="models:BingDictionaryEntry">
+                                        <VerticalStackLayout Spacing="1">
+                                            <Label Text="{Binding PartOfSpeech}" FontSize="12" FontAttributes="Italic"
+                                                   TextColor="{AppThemeBinding Light={StaticResource AccentColor}, Dark={StaticResource AccentColorDark}}"/>
+                                            <Label Text="{Binding Term}" FontSize="19"/>
+                                            <Label Text="{Binding BackTranslations}" FontSize="13"
+                                                   IsVisible="{Binding HasBackTranslations}" LineBreakMode="WordWrap"
+                                                   TextColor="{AppThemeBinding Light=#666666, Dark=#AAAAAA}"/>
+                                        </VerticalStackLayout>
+                                    </DataTemplate>
+                                </BindableLayout.ItemTemplate>
+                            </VerticalStackLayout>
+                        </VerticalStackLayout>
+                    </ScrollView>
+
+                    <!-- Attribution footer, always visible under the results. -->
+                    <Label Grid.Row="2" Text="Powered by Microsoft Bing and .NET 10.0"
+                           FontSize="11" HorizontalTextAlignment="Center" Padding="0,6"
+                           TextColor="{AppThemeBinding Light=#999999, Dark=#777777}"/>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- ═════════════════════════ STATUS ══════════════════════════ -->
+        <Label x:Name="StatusLabel" Grid.Row="2" Text="Ready." FontSize="12" Padding="12,4"
+               TextColor="{AppThemeBinding Light=#666666, Dark=#AAAAAA}"/>
+    </Grid>
+</ContentPage>

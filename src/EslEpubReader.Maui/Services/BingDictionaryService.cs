@@ -194,6 +194,12 @@ public sealed partial class BingDictionaryService
     private static string ToTraditionalChinese(string simplified)
     {
         if (simplified.Length == 0) return simplified;
+
+        // LCMapStringEx is a WINDOWS API. On other platforms (the Mac
+        // Catalyst build) fall back to returning the Simplified form —
+        // still perfectly readable for most Traditional-script users; a
+        // portable conversion table could replace this later.
+        if (!OperatingSystem.IsWindows()) return simplified;
         var buffer = new char[simplified.Length * 2];   // headroom; 1:1 in practice
         int written = LCMapStringEx(
             "zh-CN", LCMAP_TRADITIONAL_CHINESE, simplified, simplified.Length,

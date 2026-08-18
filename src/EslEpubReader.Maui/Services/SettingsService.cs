@@ -99,11 +99,11 @@ public sealed class ReaderSettings
 /// the worst outcome is simply starting fresh.</summary>
 public sealed class SettingsService
 {
-    /// <summary>settings.json next to the dictionary file in
-    /// %LOCALAPPDATA%\EslEpubReader\.</summary>
+    /// <summary>settings.json in the MAUI cross-platform app-data folder
+    /// (%LOCALAPPDATA%-equivalent on Windows, Library/Application Support on
+    /// macOS) — the one place BOTH platform builds can persist state.</summary>
     private static string SettingsFilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "EslEpubReader", "settings.json");
+        Microsoft.Maui.Storage.FileSystem.AppDataDirectory, "settings.json");
 
     /// <summary>Indented JSON so users can inspect/edit the file by hand.</summary>
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
