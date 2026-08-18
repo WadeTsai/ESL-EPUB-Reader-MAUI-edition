@@ -27,17 +27,32 @@
 
     <!-- Compact control styles: MAUI's Windows defaults render buttons and
          pickers much taller than the WinUI original's toolbar; these
-         implicit styles bring the chrome back to a slim ~40px strip. -->
+         implicit styles bring the chrome back to a slim ~40px strip.
+
+         The explicit AppThemeBinding TEXT colors are load-bearing: on
+         Windows, MAUI's default control text does NOT re-resolve when
+         UserAppTheme changes at runtime, leaving white text on the light
+         theme (invisible). AppThemeBinding re-evaluates on every theme
+         switch, so these track the day/night button correctly. Controls
+         that set their own colors (the toggle buttons, accent labels)
+         override these implicitly-styled defaults as usual. -->
     <ContentPage.Resources>
         <Style TargetType="Button">
             <Setter Property="Padding" Value="10,3"/>
             <Setter Property="HeightRequest" Value="32"/>
             <Setter Property="MinimumHeightRequest" Value="32"/>
             <Setter Property="FontSize" Value="13"/>
+            <Setter Property="TextColor" Value="{AppThemeBinding Light=#1A1A1A, Dark=#F0F0F0}"/>
+            <Setter Property="BackgroundColor" Value="{AppThemeBinding Light=#E4E4E4, Dark=#3A3A3A}"/>
         </Style>
         <Style TargetType="Picker">
             <Setter Property="HeightRequest" Value="32"/>
             <Setter Property="FontSize" Value="13"/>
+            <Setter Property="TextColor" Value="{AppThemeBinding Light=#1A1A1A, Dark=#F0F0F0}"/>
+            <Setter Property="TitleColor" Value="{AppThemeBinding Light=#444444, Dark=#BBBBBB}"/>
+        </Style>
+        <Style TargetType="Label">
+            <Setter Property="TextColor" Value="{AppThemeBinding Light=#1A1A1A, Dark=#F0F0F0}"/>
         </Style>
     </ContentPage.Resources>
 

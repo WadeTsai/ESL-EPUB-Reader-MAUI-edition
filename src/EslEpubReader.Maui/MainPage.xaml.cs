@@ -535,6 +535,14 @@ public partial class MainPage : ContentPage
                        $"column-rule: 1px solid {spineColor}; overflow-y: hidden !important; overflow-x: auto !important; }}\n");
             css.Append("body::-webkit-scrollbar { display: none; }\n");
             css.Append("img, svg { max-width: 100%; height: auto; }\n");
+            // FRAGMENTATION FIX: some publishers style paragraphs as
+            // inline-blocks (e.g. Standard Ebooks' "bridgehead" summaries).
+            // Inline-blocks are ATOMIC — they cannot split across column
+            // pages — so one taller than a page overflows past the fold and
+            // the spread shows a cut-off page. Forcing block display makes
+            // every paragraph fragmentable; in a paginated view that is
+            // exactly what a paragraph should be.
+            css.Append("body p, body blockquote { display: block !important; max-width: 100% !important; }\n");
         }
 
         if (_dark)
@@ -614,6 +622,7 @@ public partial class MainPage : ContentPage
         _dualPage = !_dualPage;
         UpdateToggleVisuals();
         await ApplyReaderStyleAsync();
+        ReaderWebView.Focus();   // keep PgDn/PgUp working right after the click
     }
 
     private void ReadAloudBtn_Clicked(object? sender, EventArgs e)
@@ -645,6 +654,7 @@ public partial class MainPage : ContentPage
         DictPanel.IsVisible = _dictVisible;
         ContentGrid.ColumnDefinitions[2].Width = _dictVisible ? new GridLength(380) : new GridLength(0);
         UpdateToggleVisuals();
+        ReaderWebView.Focus();   // keep the reading keys alive after the click
     }
 
     /// <summary>Paint the four toggle buttons: accent background = ON,
