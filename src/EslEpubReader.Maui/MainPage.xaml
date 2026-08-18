@@ -25,49 +25,72 @@
     xmlns:models="clr-namespace:EslEpubReader.Models"
     BackgroundColor="{AppThemeBinding Light=#F3F3F3, Dark=#1C1C1C}">
 
+    <!-- Compact control styles: MAUI's Windows defaults render buttons and
+         pickers much taller than the WinUI original's toolbar; these
+         implicit styles bring the chrome back to a slim ~40px strip. -->
+    <ContentPage.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="10,3"/>
+            <Setter Property="HeightRequest" Value="32"/>
+            <Setter Property="MinimumHeightRequest" Value="32"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style TargetType="Picker">
+            <Setter Property="HeightRequest" Value="32"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="MinimumHeightRequest" Value="32"/>
+            <Setter Property="VerticalOptions" Value="Center"/>
+        </Style>
+    </ContentPage.Resources>
+
     <Grid RowDefinitions="Auto,*,Auto">
 
         <!-- ═════════════════════════ TOOLBAR ═════════════════════════ -->
         <ScrollView Grid.Row="0" Orientation="Horizontal">
-            <HorizontalStackLayout Padding="10,6" Spacing="8">
+            <HorizontalStackLayout Padding="8,3" Spacing="6">
                 <Button x:Name="OpenBtn" Text="Open ePub" Clicked="OpenBtn_Clicked"/>
                 <Button x:Name="PrevBtn" Text="◀" Clicked="PrevBtn_Clicked" IsEnabled="False"/>
                 <Button x:Name="NextBtn" Text="▶" Clicked="NextBtn_Clicked" IsEnabled="False"/>
 
                 <Button x:Name="ZoomOutBtn" Text="−" Clicked="ZoomOutBtn_Clicked"/>
-                <Label x:Name="ZoomLabel" Text="100%" VerticalOptions="Center" WidthRequest="48"
-                       HorizontalTextAlignment="Center"/>
+                <Label x:Name="ZoomLabel" Text="100%" VerticalOptions="Center" WidthRequest="44"
+                       FontSize="13" HorizontalTextAlignment="Center"/>
                 <Button x:Name="ZoomInBtn" Text="+" Clicked="ZoomInBtn_Clicked"/>
 
                 <!-- Reading font / line spacing / page margins: ItemsSource
-                     is assigned in code; empty value = book default. -->
-                <Picker x:Name="FontPicker" WidthRequest="160" Title="Font"
+                     is assigned in code; empty value = book default. NOTE:
+                     no Title= — MAUI renders Picker titles as a header LINE
+                     above the control, which doubled the toolbar height. -->
+                <Picker x:Name="FontPicker" WidthRequest="160" VerticalOptions="Center"
                         SelectedIndexChanged="StylePicker_Changed"/>
-                <Picker x:Name="SpacingPicker" WidthRequest="140" Title="Spacing"
+                <Picker x:Name="SpacingPicker" WidthRequest="140" VerticalOptions="Center"
                         SelectedIndexChanged="StylePicker_Changed"/>
-                <Picker x:Name="MarginPicker" WidthRequest="170" Title="Margins"
+                <Picker x:Name="MarginPicker" WidthRequest="170" VerticalOptions="Center"
                         SelectedIndexChanged="StylePicker_Changed"/>
 
-                <HorizontalStackLayout Spacing="2">
+                <HorizontalStackLayout Spacing="0">
                     <CheckBox x:Name="DualPageCheck" CheckedChanged="DualPageCheck_Changed"/>
-                    <Label Text="Dual page" VerticalOptions="Center"/>
+                    <Label Text="Dual page" VerticalOptions="Center" FontSize="13"/>
                 </HorizontalStackLayout>
-                <HorizontalStackLayout Spacing="2">
+                <HorizontalStackLayout Spacing="0">
                     <CheckBox x:Name="ReadAloudCheck" IsChecked="True"/>
-                    <Label Text="Read aloud" VerticalOptions="Center"/>
+                    <Label Text="Read aloud" VerticalOptions="Center" FontSize="13"/>
                 </HorizontalStackLayout>
-                <HorizontalStackLayout Spacing="2">
+                <HorizontalStackLayout Spacing="0">
                     <CheckBox x:Name="ChaptersCheck" IsChecked="True" CheckedChanged="PanelCheck_Changed"/>
-                    <Label Text="Chapters" VerticalOptions="Center"/>
+                    <Label Text="Chapters" VerticalOptions="Center" FontSize="13"/>
                 </HorizontalStackLayout>
-                <HorizontalStackLayout Spacing="2">
+                <HorizontalStackLayout Spacing="0">
                     <CheckBox x:Name="DictCheck" IsChecked="True" CheckedChanged="PanelCheck_Changed"/>
-                    <Label Text="Dictionary" VerticalOptions="Center"/>
+                    <Label Text="Dictionary" VerticalOptions="Center" FontSize="13"/>
                 </HorizontalStackLayout>
 
                 <Button x:Name="ThemeBtn" Text="🌙" Clicked="ThemeBtn_Clicked"/>
                 <Label x:Name="BookTitleLabel" Text="Open an .epub file to start reading"
-                       VerticalOptions="Center" FontAttributes="Bold" LineBreakMode="TailTruncation"/>
+                       VerticalOptions="Center" FontAttributes="Bold" FontSize="13"
+                       LineBreakMode="TailTruncation"/>
             </HorizontalStackLayout>
         </ScrollView>
 
