@@ -23,3 +23,6 @@ store/portable/
 
 # MAUI publish artifacts
 dist/
+
+# macOS junk
+.DS_Store
