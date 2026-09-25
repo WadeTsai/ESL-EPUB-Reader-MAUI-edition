@@ -2,7 +2,8 @@
 
 The cross-platform port of [ESL EPUB Reader](https://github.com/WadeTsai/ESL-EPUB-Reader),
 rebuilt on **.NET MAUI** (.NET 10 / C# 14) so one code base runs on
-**Windows** (via WinUI 3) and **macOS** (via Mac Catalyst).
+**Windows** (via WinUI 3) and **macOS** (via Mac Catalyst) — plus a
+**Linux** front end (GTK 4 + WebKitGTK) that shares the same services.
 
 An ePub reader for English learners: select any word, phrase, or sentence
 while reading and instantly see an English–English dictionary entry, a
@@ -33,6 +34,62 @@ dotnet publish src/EslEpubReader.Maui/EslEpubReader.Maui.csproj -f net10.0-windo
 
 Output: `src/EslEpubReader.Maui/bin/Release/net10.0-windows10.0.19041.0/win-x64/publish/`
 (run `EslEpubReader.Maui.exe`; the app is unpackaged — no installer).
+
+### Linux
+
+.NET MAUI has no Linux target, so Linux gets its own thin front end,
+`src/EslEpubReader.Linux`: a plain `net10.0` app that renders with
+**GTK 4 + WebKitGTK 6.0** through the [GirCore](https://gircore.github.io/)
+bindings and compiles the MAUI project's `Services/` and `Models/` in
+directly. No workloads are needed.
+
+One-time setup (installs the native libraries with your package manager —
+apt, dnf, pacman or zypper — and the .NET 10 SDK into `~/.dotnet` if you
+don't have one; re-runnable):
+
+```bash
+scripts/linux/setup-dev.sh                        # needs sudo for the system packages
+scripts/linux/setup-dev.sh --no-system-packages   # libraries already installed / no sudo
+```
+
+The native runtime dependencies it installs are GTK 4 (`libgtk-4-1`),
+WebKitGTK 6.0 (`libwebkitgtk-6.0-4`), speech-dispatcher with the espeak-ng
+module (read-aloud), and the base/good GStreamer plugins.
+
+Run from source (any arguments go to the app):
+
+```bash
+scripts/linux/run.sh [book.epub]
+```
+
+Install for the current user — a self-contained Release build in
+`~/.local/lib/eslepubreader`, an `eslepubreader` launcher in `~/.local/bin`,
+an app-menu entry that also offers "Open With" for `.epub` files, and the
+icon (`--uninstall` removes it all again):
+
+```bash
+scripts/linux/install.sh
+```
+
+Or publish by hand:
+
+```bash
+dotnet publish src/EslEpubReader.Linux -c Release
+```
+
+Output: `src/EslEpubReader.Linux/bin/Release/net10.0/linux-x64/publish/eslepubreader`.
+Settings live in `~/.config/EslEpubReader/settings.json` (same format as the
+other builds). Debug builds enable WebKit's inspector (right-click → Inspect
+Element) for working on the injected page script.
+
+Linux-specific differences: the selection bridge uses a real WebKit
+script-message handler (lookups fire instantly instead of on a 700 ms poll),
+the side panels have draggable splitters again (`GtkPaned`), and read-aloud
+goes through `spd-say` (falling back to `espeak-ng`), and Bing requests are
+sent from a hidden Bing Translator page (Bing now rejects them from plain
+HTTP clients). Bing Dict has no Traditional Chinese data; Windows converts
+its Simplified results with the OS converter, while Linux and macOS convert
+them with one extra Bing Translator call (zh-Hans → zh-Hant).
 
 ### macOS (on a Mac — required)
 
@@ -101,13 +158,17 @@ actual value.
 - The `Services/` and `Models/` layers are the same plain-.NET code, with
   two portability touches: settings persist via MAUI's `AppDataDirectory`,
   and the Windows-only Simplified→Traditional character converter
-  (`LCMapStringEx`) falls back to Simplified output on macOS.
+  (`LCMapStringEx`) is replaced by a Bing Translator zh-Hans → zh-Hant call
+  on macOS and Linux.
 - WebView2-specific APIs were replaced by portable equivalents: chapters
   load as `file://` URLs (no virtual host), scripts inject after load
   (`EvaluateJavaScriptAsync`), and the page↔native bridge polls a JS
   variable instead of `postMessage`.
 - Text-to-speech uses MAUI's `TextToSpeech` (system voices on both OSes)
   instead of `Windows.Media.SpeechSynthesis`.
+- The page-side logic — injected selection/pagination script, reader
+  stylesheet, option lists, selection normalization — lives in
+  `Services/ReaderPage.cs`, shared by the MAUI and Linux front ends.
 - Not carried over: draggable pane splitters (MAUI has no GridSplitter —
-  panels toggle instead), Mica/custom title bar, and `.epub` file
+  panels toggle instead; the Linux build has them), Mica/custom title bar, and `.epub` file
   association.
