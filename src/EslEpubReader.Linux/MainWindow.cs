@@ -52,6 +52,10 @@ public sealed class MainWindow
     private readonly SettingsService _settings = new();
     private readonly SpeechService _speech = new();
 
+    /// <summary>Bing now only answers requests sent from its own page; this
+    /// hidden translator page carries them (see BingPageTransport).</summary>
+    private readonly BingPageTransport _bingTransport = new();
+
     // ---------------------------------------------------------------- state
 
     private EpubBook? _book;
@@ -122,6 +126,7 @@ public sealed class MainWindow
     public MainWindow(Gtk.Application app)
     {
         _settings.Load();
+        _bingTransport.Install();
 
         var display = Gdk.Display.GetDefault()!;
         var css = Gtk.CssProvider.New();

@@ -29,6 +29,16 @@
 // This class serializes session refreshes (SemaphoreSlim) so concurrent
 // lookups from the UI never fetch the page twice in parallel.
 //
+// BROWSER-HOSTED TRANSPORT (PageTransport):
+//   Since 2026 Bing also rejects these calls with 401 {"ShowCaptcha":false}
+//   unless they come from a real browser: its page script sets a bot-check
+//   cookie (btstkn) that a plain HttpClient cannot produce, so identical
+//   requests fail from .NET and succeed from the page. A front end that
+//   owns a web engine can therefore install PageTransport — a function that
+//   runs the POST from INSIDE a hidden, loaded translator page (the Linux
+//   build does, with WebKitGTK). The page then owns the whole session (IG,
+//   IID, token, cookies), and the HttpClient path below is bypassed.
+//
 // STATUS NOTE: like the previous Google backend, these are the endpoints of
 // Bing's own web app — free and key-less, but unofficial. The official,
 // SLA-backed alternative is the Azure Translator API (needs a key).
@@ -72,6 +82,15 @@ internal static partial class BingSession
 
     [GeneratedRegex("params_AbusePreventionHelper\\s*=\\s*\\[([0-9]+),\\s*\"([^\"]+)\",\\s*([0-9]+)\\]")]
     private static partial Regex AbuseHelperRegex();
+
+    /// <summary>
+    /// Optional browser-hosted transport (see the class comment): given an
+    /// endpoint ("ttranslatev3"/"tlookupv3") and the caller's form fields,
+    /// POSTs them from inside a loaded bing.com/translator page and returns
+    /// the raw JSON response text. Must throw HttpRequestException when the
+    /// page cannot be reached. Null = use the built-in HttpClient session.
+    /// </summary>
+    internal static Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<string>>? PageTransport { get; set; }
 
     private static BingSessionInfo? _current;
     private static DateTimeOffset _expiresAt = DateTimeOffset.MinValue;
@@ -132,6 +151,9 @@ internal static partial class BingSession
     internal static async Task<JsonDocument> PostAsync(
         string endpoint, IReadOnlyDictionary<string, string> form, CancellationToken ct)
     {
+        if (PageTransport is { } transport)
+            return JsonDocument.Parse(await transport(endpoint, form, ct));
+
         for (int attempt = 0; ; attempt++)
         {
             BingSessionInfo session = await GetAsync(forceRefresh: attempt > 0, ct);
