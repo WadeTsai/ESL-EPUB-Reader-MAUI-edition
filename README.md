@@ -78,6 +78,16 @@ dotnet publish src/EslEpubReader.Linux -c Release
 ```
 
 Output: `src/EslEpubReader.Linux/bin/Release/net10.0/linux-x64/publish/eslepubreader`.
+
+**Checking MAUI changes on Linux.** The Windows and Mac apps can't be built
+here, but on a Linux host the MAUI project targets MAUI's platform-agnostic
+`net10.0`, which compiles all shared code — `MainPage` and its XAML, the
+services — without any Windows or Apple tooling (only `Platforms/` is left
+out). `setup-dev.sh` installs the `maui-windows` workload it needs, then:
+
+```bash
+dotnet build src/EslEpubReader.Maui
+```
 Settings live in `~/.config/EslEpubReader/settings.json` (same format as the
 other builds). Debug builds enable WebKit's inspector (right-click → Inspect
 Element) for working on the injected page script.
@@ -86,8 +96,9 @@ Linux-specific differences: the selection bridge uses a real WebKit
 script-message handler (lookups fire instantly instead of on a 700 ms poll),
 the side panels have draggable splitters again (`GtkPaned`), and read-aloud
 goes through `spd-say` (falling back to `espeak-ng`), and Bing requests are
-sent from a hidden Bing Translator page (Bing now rejects them from plain
-HTTP clients). Bing Dict has no Traditional Chinese data; Windows converts
+sent from a hidden Bing Translator page — WebKitGTK here, a hidden MAUI
+`WebView` on Windows and macOS (Bing now rejects them from plain HTTP
+clients). Bing Dict has no Traditional Chinese data; Windows converts
 its Simplified results with the OS converter, while Linux and macOS convert
 them with one extra Bing Translator call (zh-Hans → zh-Hant).
 

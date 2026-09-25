@@ -225,5 +225,14 @@
         <!-- ═════════════════════════ STATUS ══════════════════════════ -->
         <Label x:Name="StatusLabel" Grid.Row="2" Text="Ready." FontSize="12" Padding="12,4"
                TextColor="{AppThemeBinding Light=#666666, Dark=#AAAAAA}"/>
+
+        <!-- Hidden Bing Translator page that carries every Bing lookup (Bing
+             rejects plain HTTP clients; see BingWebViewTransport). 1×1 and
+             fully transparent rather than IsVisible="False": WebView2 only
+             initializes once it is part of the rendered tree. -->
+        <WebView x:Name="BingWebView" Grid.Row="2" WidthRequest="1" HeightRequest="1"
+                 HorizontalOptions="End" VerticalOptions="End"
+                 Opacity="0" InputTransparent="True"
+                 SemanticProperties.Description="Background Bing session (not interactive)"/>
     </Grid>
 </ContentPage>

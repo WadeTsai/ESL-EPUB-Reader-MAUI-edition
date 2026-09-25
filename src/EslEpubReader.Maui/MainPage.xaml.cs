@@ -55,6 +55,7 @@ public partial class MainPage : ContentPage
     private readonly BingDictionaryService _bingDict = new();
     private readonly BingTranslateService _translator = new();
     private readonly SettingsService _settings = new();
+    private readonly BingWebViewTransport _bingTransport;
 
     // ---------------------------------------------------------------- state
 
@@ -88,6 +89,11 @@ public partial class MainPage : ContentPage
     {
         InitializeComponent();
         _settings.Load();
+
+        // Bing now only answers requests sent from its own page; the hidden
+        // BingWebView carries them (see BingWebViewTransport).
+        _bingTransport = new BingWebViewTransport(BingWebView);
+        _bingTransport.Install();
 
         // Populate the pickers, then re-select the persisted values. The
         // SelectedIndexChanged handlers run during these assignments but

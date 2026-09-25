@@ -6,10 +6,12 @@
 // /tlookupv3 with 401 {"ShowCaptcha":false} — its page script sets a
 // bot-check cookie that .NET cannot produce. The very same POST succeeds
 // when the page itself sends it. So this class keeps one off-screen
-// WebKitWebView on https://www.bing.com/translator and, per lookup, asks a
-// small injected helper (window.__eslBing) to XHR the endpoint with the
-// page's own session (IG, IID, anti-abuse token, cookies). The response
-// text comes back through the "eslBing" script-message handler.
+// WebKitWebView on https://www.bing.com/translator and, per lookup, asks the
+// shared injected helper (BingSession.PageHelperScript, window.__eslBing)
+// to XHR the endpoint with the page's own session (IG, IID, anti-abuse
+// token, cookies). The response text comes back through the "eslBing"
+// script-message handler. (The MAUI builds do the same with a hidden MAUI
+// WebView — BingWebViewTransport — polling instead of messaging.)
 //
 // SESSION LIFETIME: the page's token lives ~1 hour. The page is reloaded
 // when it is older than PageMaxAge, or when Bing answers statusCode 205
@@ -26,50 +28,9 @@ namespace EslEpubReader;
 
 public sealed class BingPageTransport
 {
-    private const string TranslatorUrl = "https://www.bing.com/translator";
     private const string MessageHandler = "eslBing";
-    private static readonly TimeSpan PageMaxAge = TimeSpan.FromMinutes(50);
     private static readonly TimeSpan LoadTimeout = TimeSpan.FromSeconds(25);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(12);
-
-    /// <summary>The in-page helper. Uses the page's own globals: _G.IG and
-    /// params_AbusePreventionHelper = [key, token, lifetimeMs]. Non-200
-    /// answers that carry no statusCode are normalized to {"statusCode":N}
-    /// so the services report the real HTTP code.</summary>
-    private const string HelperScript =
-        """
-        (function () {
-            if (window.__eslBing) return;
-            var sfx = 0;
-            function iid() {
-                var e = document.querySelector('[data-iid^="translator"]');
-                return e ? e.getAttribute('data-iid') : 'translator.5023';
-            }
-            window.__eslBing = function (id, endpoint, body) {
-                function reply(ok, text) {
-                    window.webkit.messageHandlers.eslBing.postMessage(JSON.stringify({ id: id, ok: ok, body: text }));
-                }
-                try {
-                    var h = window.params_AbusePreventionHelper;
-                    var x = new XMLHttpRequest();
-                    x.open('POST', '/' + endpoint + '?isVertical=1&&IG=' + _G.IG + '&IID=' + iid() + '&SFX=' + (++sfx), true);
-                    x.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
-                    x.onload = function () {
-                        var t = x.responseText;
-                        if (x.status !== 200) {
-                            var o = null;
-                            try { o = JSON.parse(t); } catch (e) { }
-                            if (!o || typeof o !== 'object' || Array.isArray(o) || o.statusCode === undefined)
-                                t = JSON.stringify({ statusCode: x.status });
-                        }
-                        reply(true, t);
-                    };
-                    x.onerror = function () { reply(false, 'network error'); };
-                    x.send(body + '&token=' + encodeURIComponent(h[1]) + '&key=' + encodeURIComponent(h[0]));
-                } catch (e) { reply(false, String(e)); }
-            };
-        })();
-        """;
 
     private readonly SynchronizationContext _ui;
     private readonly WebKit.WebView _view;
@@ -89,7 +50,7 @@ public sealed class BingPageTransport
         _view = WebKit.WebView.New();
         _view.IsMuted = true;
         WebKit.UserContentManager content = _view.GetUserContentManager();
-        content.AddScript(WebKit.UserScript.New(HelperScript,
+        content.AddScript(WebKit.UserScript.New(BingSession.PageHelperScript,
             WebKit.UserContentInjectedFrames.TopFrame, WebKit.UserScriptInjectionTime.End, null, null));
         content.RegisterScriptMessageHandler(MessageHandler, null);
         content.OnScriptMessageReceived += OnMessage;
@@ -129,11 +90,11 @@ public sealed class BingPageTransport
 
     private async Task<string> PostOnUiAsync(string endpoint, IReadOnlyDictionary<string, string> form, CancellationToken ct)
     {
-        if (_loaded.Task.IsFaulted || DateTime.UtcNow - _loadedAt > PageMaxAge && _loaded.Task.IsCompleted)
+        if (_loaded.Task.IsFaulted || DateTime.UtcNow - _loadedAt > BingSession.PageMaxAge && _loaded.Task.IsCompleted)
             Reload();
 
         string body = await SendAsync(endpoint, form, ct);
-        if (IsTokenExpired(body))
+        if (BingSession.IsTokenExpired(body))
         {
             Reload();
             body = await SendAsync(endpoint, form, ct);
@@ -151,10 +112,7 @@ public sealed class BingPageTransport
         _pending[id] = reply;
         try
         {
-            string encoded = string.Join("&", form.Select(kv =>
-                $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
-            await _view.EvaluateJavascriptAsync(
-                $"window.__eslBing({id}, {JsonSerializer.Serialize(endpoint)}, {JsonSerializer.Serialize(encoded)}); 0");
+            await _view.EvaluateJavascriptAsync(BingSession.PageRequestScript(id, endpoint, form));
             return await reply.Task.WaitAsync(RequestTimeout, ct);
         }
         catch (TimeoutException) { throw new HttpRequestException("Bing did not answer in time."); }
@@ -167,13 +125,10 @@ public sealed class BingPageTransport
     {
         try
         {
-            using JsonDocument doc = JsonDocument.Parse(e.Value.ToString() ?? "");
-            JsonElement root = doc.RootElement;
-            int id = root.GetProperty("id").GetInt32();
+            (int id, bool ok, string body) = BingSession.ParsePageReply(e.Value.ToString() ?? "");
             if (!_pending.TryGetValue(id, out TaskCompletionSource<string>? reply)) return;
 
-            string body = root.GetProperty("body").GetString() ?? "";
-            if (root.GetProperty("ok").GetBoolean()) reply.TrySetResult(body);
+            if (ok) reply.TrySetResult(body);
             else reply.TrySetException(new HttpRequestException($"Bing request failed: {body}"));
         }
         catch (Exception ex) when (ex is JsonException or KeyNotFoundException or InvalidOperationException)
@@ -186,19 +141,6 @@ public sealed class BingPageTransport
     {
         if (_loaded.Task.IsCompleted)
             _loaded = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _view.LoadUri(TranslatorUrl);
-    }
-
-    /// <summary>{"statusCode":205} = the page's token expired.</summary>
-    private static bool IsTokenExpired(string body)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(body);
-            return doc.RootElement.ValueKind == JsonValueKind.Object &&
-                   doc.RootElement.TryGetProperty("statusCode", out JsonElement sc) &&
-                   sc.ValueKind == JsonValueKind.Number && sc.GetInt32() == 205;
-        }
-        catch (JsonException) { return false; }
+        _view.LoadUri(BingSession.TranslatorPageUrl);
     }
 }

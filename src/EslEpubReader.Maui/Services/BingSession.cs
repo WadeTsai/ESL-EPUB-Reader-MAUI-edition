@@ -33,11 +33,13 @@
 //   Since 2026 Bing also rejects these calls with 401 {"ShowCaptcha":false}
 //   unless they come from a real browser: its page script sets a bot-check
 //   cookie (btstkn) that a plain HttpClient cannot produce, so identical
-//   requests fail from .NET and succeed from the page. A front end that
-//   owns a web engine can therefore install PageTransport — a function that
-//   runs the POST from INSIDE a hidden, loaded translator page (the Linux
-//   build does, with WebKitGTK). The page then owns the whole session (IG,
-//   IID, token, cookies), and the HttpClient path below is bypassed.
+//   requests fail from .NET and succeed from the page. Front ends
+//   therefore install PageTransport — a function that runs the POST from
+//   INSIDE a hidden, loaded translator page. The page then owns the whole
+//   session (IG, IID, token, cookies), and the HttpClient path below is
+//   bypassed. The Linux build uses WebKitGTK (BingPageTransport); the MAUI
+//   builds use a hidden MAUI WebView (BingWebViewTransport). Both inject
+//   the shared PageHelperScript below.
 //
 // STATUS NOTE: like the previous Google backend, these are the endpoints of
 // Bing's own web app — free and key-less, but unofficial. The official,
@@ -91,6 +93,108 @@ internal static partial class BingSession
     /// page cannot be reached. Null = use the built-in HttpClient session.
     /// </summary>
     internal static Func<string, IReadOnlyDictionary<string, string>, CancellationToken, Task<string>>? PageTransport { get; set; }
+
+    /// <summary>Page a PageTransport keeps loaded (and reloads when its
+    /// token expires or it grows older than PageMaxAge).</summary>
+    internal const string TranslatorPageUrl = "https://www.bing.com/translator";
+    internal static readonly TimeSpan PageMaxAge = TimeSpan.FromMinutes(50);
+
+    /// <summary>
+    /// The helper a PageTransport injects into the translator page. It
+    /// POSTs with the page's own session — _G.IG and
+    /// params_AbusePreventionHelper = [key, token, lifetimeMs] — and
+    /// delivers each answer as JSON {id, ok, body} in one of two ways:
+    ///   * to the "eslBing" script-message handler when the host
+    ///     registered one (WebKitGTK), else
+    ///   * into a queue that native code drains with PageTakeScript
+    ///     (MAUI's WebView has no message channel), base64-wrapped so no
+    ///     platform's string escaping can corrupt it.
+    /// Non-200 answers without a statusCode become {"statusCode":N}, so the
+    /// services report the real HTTP code. Kept //-comment-free and
+    /// ';'-terminated: MAUI flattens injected scripts to one line.
+    /// </summary>
+    internal const string PageHelperScript =
+        """
+        (function () {
+            if (window.__eslBing) return;
+            var sfx = 0, results = {};
+            function iid() {
+                var e = document.querySelector('[data-iid^="translator"]');
+                return e ? e.getAttribute('data-iid') : 'translator.5023';
+            }
+            function finish(id, ok, text) {
+                var r = JSON.stringify({ id: id, ok: ok, body: text });
+                try { window.webkit.messageHandlers.eslBing.postMessage(r); return; } catch (e) { }
+                results[id] = r;
+            }
+            window.__eslBingReady = function () {
+                return !!(window._G && _G.IG && window.params_AbusePreventionHelper);
+            };
+            window.__eslBingTake = function (id) {
+                var r = results[id];
+                if (r === undefined) return '';
+                delete results[id];
+                return btoa(unescape(encodeURIComponent(r)));
+            };
+            window.__eslBing = function (id, endpoint, body) {
+                try {
+                    var h = window.params_AbusePreventionHelper;
+                    var x = new XMLHttpRequest();
+                    x.open('POST', '/' + endpoint + '?isVertical=1&&IG=' + _G.IG + '&IID=' + iid() + '&SFX=' + (++sfx), true);
+                    x.setRequestHeader('Content-type', 'application/x-www-form-urlencoded');
+                    x.onload = function () {
+                        var t = x.responseText, o = null;
+                        if (x.status !== 200) {
+                            try { o = JSON.parse(t); } catch (e) { }
+                            if (!o || typeof o !== 'object' || Array.isArray(o) || o.statusCode === undefined)
+                                t = JSON.stringify({ statusCode: x.status });
+                        }
+                        finish(id, true, t);
+                    };
+                    x.onerror = function () { finish(id, false, 'network error'); };
+                    x.send(body + '&token=' + encodeURIComponent(h[1]) + '&key=' + encodeURIComponent(h[0]));
+                } catch (e) { finish(id, false, String(e)); }
+            };
+        })();
+        """;
+
+    /// <summary>Script that starts request <paramref name="id"/> in the page.</summary>
+    internal static string PageRequestScript(int id, string endpoint, IReadOnlyDictionary<string, string> form)
+    {
+        string encoded = string.Join("&", form.Select(kv =>
+            $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value)}"));
+        return $"window.__eslBing({id}, {JsonSerializer.Serialize(endpoint)}, {JsonSerializer.Serialize(encoded)}); 0";
+    }
+
+    /// <summary>Script returning request <paramref name="id"/>'s base64
+    /// answer, or '' while it is still pending (see PageHelperScript).</summary>
+    internal static string PageTakeScript(int id) => $"window.__eslBingTake({id})";
+
+    /// <summary>Unwrap one {id, ok, body} answer from the page helper.
+    /// Ok = false means the page could not send the request (Body then
+    /// says why). Throws JsonException/KeyNotFoundException for anything
+    /// that is not such an answer.</summary>
+    internal static (int Id, bool Ok, string Body) ParsePageReply(string json)
+    {
+        using JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
+        return (root.GetProperty("id").GetInt32(),
+                root.GetProperty("ok").GetBoolean(),
+                root.GetProperty("body").GetString() ?? "");
+    }
+
+    /// <summary>{"statusCode":205} = the page's token expired; reload it.</summary>
+    internal static bool IsTokenExpired(string body)
+    {
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(body);
+            return doc.RootElement.ValueKind == JsonValueKind.Object &&
+                   doc.RootElement.TryGetProperty("statusCode", out JsonElement sc) &&
+                   sc.ValueKind == JsonValueKind.Number && sc.GetInt32() == 205;
+        }
+        catch (JsonException) { return false; }
+    }
 
     private static BingSessionInfo? _current;
     private static DateTimeOffset _expiresAt = DateTimeOffset.MinValue;
