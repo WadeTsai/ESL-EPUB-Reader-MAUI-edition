@@ -9,7 +9,11 @@
 #   2. The .NET 10 SDK — skipped if a 10.x SDK is already on PATH or in
 #      ~/.dotnet; otherwise installed per-user into ~/.dotnet with
 #      Microsoft's dotnet-install.sh (no sudo), and added to ~/.bashrc.
-#   3. A restore + build of the Linux project to prove the setup.
+#   3. The maui-windows workload, so the MAUI project's platform-agnostic
+#      net10.0 target can COMPILE-CHECK the shared MAUI code (MainPage,
+#      XAML, services) on Linux. (The Windows/Mac apps themselves still
+#      need Windows/macOS to build.)
+#   4. A restore + build of both projects to prove the setup.
 #
 # Safe to re-run. Pass --no-system-packages to skip step 1 (e.g. when you
 # lack sudo and the libraries are already installed).
@@ -92,8 +96,24 @@ fi
 export DOTNET_ROOT="$(dirname "$DOTNET")"
 export PATH="$DOTNET_ROOT:$PATH"
 
-# ------------------------------------------------------------------ 3. build
+# ------------------------------------------------- 3. MAUI check workload
+MAUI_PROJECT="$REPO_ROOT/src/EslEpubReader.Maui/EslEpubReader.Maui.csproj"
+if "$DOTNET" workload list 2>/dev/null | grep -q '^maui'; then
+    say "A MAUI workload is already installed"
+elif "$DOTNET" workload install maui-windows; then
+    say "Installed the maui-windows workload (for the MAUI compile check)"
+else
+    # A distro-packaged SDK under /usr needs root to add workloads.
+    warn "could not install the maui-windows workload — try: sudo $DOTNET workload install maui-windows"
+fi
+
+# ------------------------------------------------------------------ 4. build
 say "Restoring and building the Linux project"
 "$DOTNET" build "$PROJECT" -c Debug
+
+if "$DOTNET" workload list 2>/dev/null | grep -q '^maui'; then
+    say "Compile-checking the shared MAUI code (net10.0)"
+    "$DOTNET" build "$MAUI_PROJECT" -c Debug
+fi
 
 say "Done. Run the app with:  scripts/linux/run.sh [book.epub]"

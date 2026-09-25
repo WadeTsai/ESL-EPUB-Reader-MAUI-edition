@@ -28,7 +28,13 @@
   <PropertyGroup>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('windows'))">net10.0-windows10.0.19041.0</TargetFrameworks>
     <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('osx'))">net10.0-maccatalyst</TargetFrameworks>
+    <!-- Linux has no MAUI app head (the Linux app is src/EslEpubReader.Linux),
+         but MAUI's platform-agnostic net10.0 TFM compiles every shared
+         file — pages, XAML, services — so changes can be checked here
+         (needs any MAUI workload, e.g. `dotnet workload install maui-windows`). -->
+    <TargetFrameworks Condition="$([MSBuild]::IsOSPlatform('linux'))">net10.0</TargetFrameworks>
     <OutputType>Exe</OutputType>
+    <OutputType Condition="'$(TargetFramework)' == 'net10.0'">Library</OutputType>
     <RootNamespace>EslEpubReader</RootNamespace>
     <UseMaui>true</UseMaui>
     <SingleProject>true</SingleProject>
