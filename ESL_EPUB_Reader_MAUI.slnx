@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/EslEpubReader.Maui/EslEpubReader.Maui.csproj" />
+    <Project Path="src/EslEpubReader.Linux/EslEpubReader.Linux.csproj" />
   </Folder>
 </Solution>

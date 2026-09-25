@@ -1,0 +1,11 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Linux app icon: the MAUI appicon.svg foreground (open book) composited
+       onto its #0F6CBD accent tile — MAUI paints the tile at build time,
+       freedesktop icon themes need it baked into the SVG. -->
+  <rect x="4" y="4" width="120" height="120" rx="26" fill="#0F6CBD"/>
+  <g fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M64 38 C 52 30, 34 30, 24 36 L 24 92 C 34 86, 52 86, 64 94 Z" fill="#FFFFFF"/>
+    <path d="M64 38 C 76 30, 94 30, 104 36 L 104 92 C 94 86, 76 86, 64 94 Z" fill="#FFFFFF"/>
+    <line x1="64" y1="40" x2="64" y2="92"/>
+  </g>
+</svg>
