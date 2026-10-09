@@ -29,7 +29,7 @@
     <DefineConstants>$(DefineConstants);ESL_LINUX</DefineConstants>
 
     <Product>ESL EPUB Reader</Product>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
 
     <!-- Publish defaults: a self-contained linux-x64 folder that runs on a
          machine without the .NET runtime (GTK/WebKitGTK still come from

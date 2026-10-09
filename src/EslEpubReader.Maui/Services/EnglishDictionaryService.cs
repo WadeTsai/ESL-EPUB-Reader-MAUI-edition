@@ -73,7 +73,7 @@ public sealed class EnglishDictionaryService
         var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
         // Wikimedia's API policy asks every client to identify itself.
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
-            "EslEpubReader/1.1 (https://github.com/WadeTsai/ESL-EPUB-Reader-MAUI-edition)");
+            "EslEpubReader/1.2 (https://github.com/WadeTsai/ESL-EPUB-Reader-MAUI-edition)");
         return client;
     }
 
