@@ -21,8 +21,9 @@
 //     POLLS a JS helper (window.__eslFraction) on a 3-second timer; the
 //     same helper family restores positions and realigns dual-page mode.
 //
-//   * Text-to-speech — Windows.Media.SpeechSynthesis is Windows-only;
-//     MAUI's TextToSpeech.Default speaks on both platforms.
+//   * Text-to-speech — selections are read by Google Translate's voice
+//     (Services/GoogleTtsService fetches the clip, Mp3Player plays it on
+//     both platforms); MAUI's TextToSpeech.Default is the offline fallback.
 //
 //   * Virtual host — WebView2's SetVirtualHostNameToFolderMapping is
 //     Windows-only; chapters load as plain file:// URLs, which both
@@ -55,6 +56,9 @@ public partial class MainPage : ContentPage
     private readonly BingDictionaryService _bingDict = new();
     private readonly BingTranslateService _translator = new();
     private readonly SettingsService _settings = new();
+    private readonly GoogleTtsService _googleTts = new();
+    private readonly Mp3Player _mp3Player = new();
+    private readonly AnkiConnectService _anki = new();
     private readonly BingWebViewTransport _bingTransport;
 
     // ---------------------------------------------------------------- state
@@ -72,6 +76,15 @@ public partial class MainPage : ContentPage
     private bool _dark;
 
     private string _lastLookedUpTerm = "";
+
+    // The last lookup, kept for the "+ Anki" card: the sentence the word was
+    // selected in (from the page script) and the three answers. The results
+    // are null while a lookup is in flight.
+    private string _lastContext = "";
+    private EnglishLookupResult? _lastEnglish;
+    private ChineseLookupResult? _lastChinese;
+    private TranslationResult? _lastTranslation;
+
     private double? _pendingScrollFraction;
     private double _currentScrollFraction;
     private DateTime _lastScrollSave = DateTime.MinValue;
@@ -89,6 +102,7 @@ public partial class MainPage : ContentPage
     {
         InitializeComponent();
         _settings.Load();
+        _anki.Configure(_settings.Current);
 
         // Bing now only answers requests sent from its own page; the hidden
         // BingWebView carries them (see BingWebViewTransport).
@@ -137,8 +151,9 @@ public partial class MainPage : ContentPage
         timer.Start();
     }
 
-    /// <summary>First appearance: pick an English TTS voice and reopen the
-    /// last session's book ("continue where you left off").</summary>
+    /// <summary>First appearance: pick an English system voice (the fallback
+    /// when Google Translate is unreachable) and reopen the last session's
+    /// book ("continue where you left off").</summary>
     protected override async void OnAppearing()
     {
         base.OnAppearing();
@@ -285,10 +300,11 @@ public partial class MainPage : ContentPage
 
     /// <summary>
     /// The SELECTION bridge: the injected script queues the latest selection
-    /// in window.__eslPendingSel; this poll (every 700ms) collects and
-    /// clears it, then fires the triple lookup. Polling is used instead of
-    /// scheme-navigation tricks because it behaves identically on WebView2
-    /// and WKWebView.
+    /// (plus the sentence around it) and this poll (every 700ms) takes it
+    /// via window.__eslTake(), then fires the triple lookup. Polling is used
+    /// instead of scheme-navigation tricks because it behaves identically on
+    /// WebView2 and WKWebView; the payload is base64 so the platforms'
+    /// differing result escaping cannot corrupt it.
     /// </summary>
     private async Task PollSelectionAsync()
     {
@@ -296,18 +312,14 @@ public partial class MainPage : ContentPage
         try
         {
             string? result = await ReaderWebView.EvaluateJavaScriptAsync(
-                "(function(){ var s = window.__eslPendingSel || ''; window.__eslPendingSel = ''; return s; })()");
+                "window.__eslTake ? window.__eslTake() : ''");
             if (string.IsNullOrEmpty(result) || result == "null") return;
 
-            // EvaluateJavaScriptAsync returns a JSON-ish encoded string on
-            // some platforms — unescape conservatively.
-            string raw = result.Trim('"');
-            raw = raw.Replace("\\u0027", "'").Replace("\\\"", "\"").Replace("\\\\", "\\");
-
+            (string raw, string context) = ReaderPage.DecodeSelectionMessage(result);
             string term = ReaderPage.NormalizeSelection(raw);
             if (term.Length == 0) return;
 
-            _ = LookupAllSourcesAsync(term);
+            _ = LookupAllSourcesAsync(term, context);
         }
         catch { /* page mid-navigation — try again next tick */ }
     }
@@ -502,15 +514,16 @@ public partial class MainPage : ContentPage
         DictHeader.Text = $"Bing Dict ({language.ShortName})";
 
         if (_lastLookedUpTerm.Length > 0)
-            _ = LookupAllSourcesAsync(_lastLookedUpTerm, speakAloud: false);
+            _ = LookupAllSourcesAsync(_lastLookedUpTerm, _lastContext, speakAloud: false);
     }
 
     // ============================================================== lookups
 
     /// <summary>The triple lookup + read-aloud — behaviorally identical to
     /// the WinUI app (dictionaries skipped for sentence-length selections;
-    /// stale lookups cancelled; refreshes don't re-speak).</summary>
-    private async Task LookupAllSourcesAsync(string term, bool speakAloud = true)
+    /// stale lookups cancelled; refreshes don't re-speak). The answers are
+    /// kept for the "+ Anki" card, which unlocks once all three are in.</summary>
+    private async Task LookupAllSourcesAsync(string term, string context, bool speakAloud = true)
     {
         _lookupCts?.Cancel();
         _lookupCts?.Dispose();
@@ -520,9 +533,14 @@ public partial class MainPage : ContentPage
         bool dictionarySized = ReaderPage.IsDictionarySized(term);
 
         _lastLookedUpTerm = term;
+        _lastContext = context;
+        _lastEnglish = null;
+        _lastChinese = null;
+        _lastTranslation = null;
         MainThread.BeginInvokeOnMainThread(() =>
         {
             SpeakBtn.IsEnabled = true;
+            AnkiBtn.IsEnabled = false;
             TermLabel.Text = term;
             PhoneticLabel.Text = "";
             EnglishStatusLabel.Text = dictionarySized
@@ -557,6 +575,7 @@ public partial class MainPage : ContentPage
                 if (englishTask is not null)
                 {
                     EnglishLookupResult r = englishTask.Result;
+                    _lastEnglish = r;
                     PhoneticLabel.Text = r.Phonetic;
                     BindableLayout.SetItemsSource(EnglishList, r.Senses);
                     EnglishStatusLabel.Text = r.StatusMessage;
@@ -565,33 +584,121 @@ public partial class MainPage : ContentPage
                 if (chineseTask is not null)
                 {
                     ChineseLookupResult r = chineseTask.Result;
+                    _lastChinese = r;
                     BindableLayout.SetItemsSource(ChineseList, r.Entries);
                     ChineseStatusLabel.Text = r.StatusMessage;
                     ChineseStatusLabel.IsVisible = r.StatusMessage.Length > 0;
                 }
                 TranslationResult t = translateTask.Result;
+                _lastTranslation = t;
                 TranslationLabel.Text = t.TranslatedText;
                 TranslationStatusLabel.Text = t.StatusMessage;
                 TranslationStatusLabel.IsVisible = t.StatusMessage.Length > 0;
+                AnkiBtn.IsEnabled = true;
             });
         }
         catch (OperationCanceledException) { /* superseded by a newer selection */ }
     }
 
-    // ============================================================ text-to-speech
+    // ================================================================= Anki
 
-    /// <summary>MAUI's cross-platform speech (Windows voices / macOS voices).
-    /// Cancelling the previous utterance keeps rapid selections from
-    /// overlapping audibly, mirroring the WinUI MediaPlayer behavior.</summary>
-    private async Task SpeakAsync(string text)
+    /// <summary>"+ Anki": send the current word — its three lookups, the
+    /// sentence it was selected in, where in the book it is, and its
+    /// pronunciation clip — to Anki through AnkiConnect.</summary>
+    private async void AnkiBtn_Clicked(object? sender, EventArgs e)
     {
+        string term = _lastLookedUpTerm;
+        if (term.Length == 0 || _lastTranslation is null) return;
+
+        AnkiBtn.IsEnabled = false;
+        StatusLabel.Text = $"Adding “{term}” to Anki…";
         try
         {
-            _ttsCts?.Cancel();
-            _ttsCts?.Dispose();
-            _ttsCts = new CancellationTokenSource();
+            byte[]? audio = null;
+            try { audio = await _googleTts.SynthesizeAsync(term, CancellationToken.None); }
+            catch { /* no clip (offline) — the card still goes in */ }
+
+            AnkiAddResult result = await _anki.AddAsync(BuildAnkiCard(term, audio), CancellationToken.None);
+            StatusLabel.Text = result.AlreadyExisted
+                ? $"“{term}” is already in the Anki deck “{_anki.DeckName}”."
+                : $"Added “{term}” to the Anki deck “{_anki.DeckName}”.";
+        }
+        catch (AnkiConnectException ex)
+        {
+            StatusLabel.Text = $"Anki: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = $"Could not add to Anki: {ex.Message}";
+        }
+        finally
+        {
+            // A newer lookup may have started meanwhile; it owns the button then.
+            AnkiBtn.IsEnabled = _lastTranslation is not null;
+        }
+    }
+
+    private AnkiCard BuildAnkiCard(string term, byte[]? audio)
+    {
+        string title = _book is null ? ""
+            : ChapterList.SelectedItem is EpubChapter chapter ? $"{_book.Title} — {chapter.Title}"
+            : _book.Title;
+        string url = "";
+        try
+        {
+            if (_settings.Current.LastBookPath.Length > 0)
+                url = new Uri(_settings.Current.LastBookPath).AbsoluteUri;
+        }
+        catch (UriFormatException) { /* odd path — no link on the card */ }
+
+        return new AnkiCard
+        {
+            Text = term,
+            Phonetic = _lastEnglish?.Phonetic ?? "",
+            Context = _lastContext,
+            Translation = _lastTranslation?.TranslatedText ?? "",
+            TargetLanguage = (LanguagePicker.SelectedItem as TranslationLanguage)?.ShortName ?? "",
+            Senses = _lastEnglish?.Senses ?? [],
+            Entries = _lastChinese?.Entries ?? [],
+            Title = title,
+            Url = url,
+            AudioMp3 = audio,
+        };
+    }
+
+    private async void AnkiSettingsBtn_Clicked(object? sender, EventArgs e)
+    {
+        await Navigation.PushModalAsync(new AnkiSettingsPage(_settings, _anki));
+    }
+
+    // ============================================================ text-to-speech
+
+    /// <summary>Read <paramref name="text"/> with Google Translate's voice
+    /// (fetched as MP3, played through the OS media stack); when that
+    /// cannot be reached — offline, blocked — the system voice reads it
+    /// instead. Cancelling the previous utterance keeps rapid selections
+    /// from overlapping audibly, mirroring the WinUI MediaPlayer behavior.</summary>
+    private async Task SpeakAsync(string text)
+    {
+        _ttsCts?.Cancel();
+        _ttsCts?.Dispose();
+        _ttsCts = new CancellationTokenSource();
+        CancellationToken ct = _ttsCts.Token;
+        try
+        {
+            try
+            {
+                byte[] mp3 = await _googleTts.SynthesizeAsync(text, ct);
+                await _mp3Player.PlayAsync(mp3, ct);
+                return;
+            }
+            catch (Exception) when (!ct.IsCancellationRequested)
+            {
+                // Google Translate unreachable (or no player on this target):
+                // fall through to the local voice.
+            }
             await TextToSpeech.Default.SpeakAsync(text,
-                new SpeechOptions { Locale = _englishVoice }, _ttsCts.Token);
+                new SpeechOptions { Locale = _englishVoice }, ct);
         }
         catch (OperationCanceledException) { /* replaced by a newer utterance */ }
         catch (Exception ex)

@@ -154,11 +154,24 @@
                             <Picker x:Name="LanguagePicker" Grid.Column="1" WidthRequest="190"
                                     FontSize="12" SelectedIndexChanged="LanguagePicker_Changed"/>
                         </Grid>
-                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                        <!-- Term + actions: read aloud, add to Anki (AnkiConnect),
+                             Anki settings. "+ Anki" enables once the lookups
+                             have all answered, so the card is complete. -->
+                        <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="6">
                             <Label x:Name="TermLabel" Text="Select a word or phrase in the book"
                                    FontSize="22" FontAttributes="Bold" LineBreakMode="WordWrap"/>
                             <Button x:Name="SpeakBtn" Grid.Column="1" Text="🔊" IsEnabled="False"
-                                    Clicked="SpeakBtn_Clicked" VerticalOptions="Start"/>
+                                    Clicked="SpeakBtn_Clicked" VerticalOptions="Start"
+                                    ToolTipProperties.Text="Read aloud"
+                                    SemanticProperties.Description="Read the word aloud"/>
+                            <Button x:Name="AnkiBtn" Grid.Column="2" Text="＋ Anki" IsEnabled="False"
+                                    Clicked="AnkiBtn_Clicked" VerticalOptions="Start"
+                                    ToolTipProperties.Text="Add this word to Anki (needs Anki running with AnkiConnect)"
+                                    SemanticProperties.Description="Add this word to Anki"/>
+                            <Button x:Name="AnkiSettingsBtn" Grid.Column="3" Text="⚙"
+                                    Clicked="AnkiSettingsBtn_Clicked" VerticalOptions="Start"
+                                    ToolTipProperties.Text="Anki Connect settings"
+                                    SemanticProperties.Description="Anki Connect settings"/>
                         </Grid>
                         <Label x:Name="PhoneticLabel" FontAttributes="Italic"
                                TextColor="{AppThemeBinding Light={StaticResource AccentColor}, Dark={StaticResource AccentColorDark}}"/>

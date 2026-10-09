@@ -9,7 +9,9 @@ An ePub reader for English learners: select any word, phrase, or sentence
 while reading and instantly see an English–English dictionary entry, a
 bilingual **Bing Dict** entry (part of speech + back-translations), and a
 full **Bing Translator** rendering — into Traditional Chinese by default or
-any of 130+ languages. Selections are read aloud by the system voice.
+any of 130+ languages. Selections are read aloud by Google Translate's
+English voice (the system voice takes over when offline). One click sends
+the word to **Anki** as a flashcard (see [Anki](#anki-anki-connect)).
 Day/night themes, single/dual-page layouts with strict page-pair
 pagination, adjustable fonts/spacing/margins with a responsive text column,
 and automatic resume are all carried over from the WinUI original.
@@ -53,8 +55,10 @@ scripts/linux/setup-dev.sh --no-system-packages   # libraries already installed 
 ```
 
 The native runtime dependencies it installs are GTK 4 (`libgtk-4-1`),
-WebKitGTK 6.0 (`libwebkitgtk-6.0-4`), speech-dispatcher with the espeak-ng
-module (read-aloud), and the base/good GStreamer plugins.
+WebKitGTK 6.0 (`libwebkitgtk-6.0-4`), `mpv` (plays the Google Translate
+read-aloud clips; `ffplay` or the GStreamer `gst-play-1.0`/`gst-launch-1.0`
+tools work too), speech-dispatcher with the espeak-ng module (offline
+read-aloud fallback), and the base/good GStreamer plugins.
 
 Run from source (any arguments go to the app):
 
@@ -94,8 +98,9 @@ Element) for working on the injected page script.
 
 Linux-specific differences: the selection bridge uses a real WebKit
 script-message handler (lookups fire instantly instead of on a 700 ms poll),
-the side panels have draggable splitters again (`GtkPaned`), and read-aloud
-goes through `spd-say` (falling back to `espeak-ng`), and Bing requests are
+the side panels have draggable splitters again (`GtkPaned`), read-aloud
+plays the Google Translate clip with `mpv` (or `ffplay`/GStreamer) and falls
+back to `spd-say`/`espeak-ng` when offline, and Bing requests are
 sent from a hidden Bing Translator page — WebKitGTK here, a hidden MAUI
 `WebView` on Windows and macOS (Bing now rejects them from plain HTTP
 clients). Bing Dict has no Traditional Chinese data; Windows converts
@@ -164,6 +169,37 @@ so it reports the override rather than the real system setting when that
 variable is exported. Use `env -u DEVELOPER_DIR xcode-select -p` to read the
 actual value.
 
+## Anki (Anki Connect)
+
+The **＋ Anki** button in the dictionary panel turns the looked-up word into
+an Anki **cloze** card, the way the [Saladict](https://saladict.crimx.com/anki)
+browser extension does: the sentence the word was selected in, with the
+word as a `{{c1::…}}` deletion, is the question; the answer reveals the
+word, its IPA, the Google Translate pronunciation clip, the Bing Translator
+rendering, the English–English senses, the Bing Dict entries, and the book
+and chapter it came from.
+
+Setup, once:
+
+1. In Anki: **Tools ▸ Add-ons ▸ Get Add-ons…**, enter the AnkiConnect code
+   `2055492159`, restart Anki.
+2. Keep Anki running (with a profile open) while you read.
+
+Cards go to the deck **ESL EPUB Reader** using the **ESL EPUB Reader Cloze**
+note type — a real cloze type with Saladict's fields, card template and
+styling (Date, Text, Translation, Context, ContextCloze, Note, Title, Url,
+Favicon, Audio) — both are created on first use if missing. Any existing
+note type can be chosen instead; fields are filled by name, so Anki's
+built-in **Cloze** (the sentence goes to *Text*, everything else to
+*Back Extra*) and Saladict's own **Saladict Word** work as well. A word
+already in the deck is not added twice.
+
+The **⚙** button next to it opens the settings: deck, note type, tags
+(default `esl-epub-reader`), the AnkiConnect address (default
+`http://127.0.0.1:8765`) and the API key, if you set one in the add-on's
+config. **Test connection** checks that Anki answers. The values live in
+`settings.json` next to the reading position.
+
 ## Port notes (vs. the WinUI original)
 
 - The `Services/` and `Models/` layers are the same plain-.NET code, with
@@ -175,8 +211,10 @@ actual value.
   load as `file://` URLs (no virtual host), scripts inject after load
   (`EvaluateJavaScriptAsync`), and the page↔native bridge polls a JS
   variable instead of `postMessage`.
-- Text-to-speech uses MAUI's `TextToSpeech` (system voices on both OSes)
-  instead of `Windows.Media.SpeechSynthesis`.
+- Text-to-speech fetches Google Translate's English voice as MP3
+  (`Services/GoogleTtsService.cs`) and plays it through the OS media stack
+  (`Mp3Player.cs`: `MediaPlayer` on Windows, `AVAudioPlayer` on macOS);
+  MAUI's `TextToSpeech` (system voices) is the offline fallback.
 - The page-side logic — injected selection/pagination script, reader
   stylesheet, option lists, selection normalization — lives in
   `Services/ReaderPage.cs`, shared by the MAUI and Linux front ends.

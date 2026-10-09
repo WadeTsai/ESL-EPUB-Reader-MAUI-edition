@@ -51,6 +51,7 @@ public sealed class MainWindow
     private readonly BingTranslateService _translator = new();
     private readonly SettingsService _settings = new();
     private readonly SpeechService _speech = new();
+    private readonly AnkiConnectService _anki = new();
 
     /// <summary>Bing now only answers requests sent from its own page; this
     /// hidden translator page carries them (see BingPageTransport).</summary>
@@ -74,6 +75,15 @@ public sealed class MainWindow
     private bool _dictVisible = true;
 
     private string _lastLookedUpTerm = "";
+
+    // The last lookup, kept for the "+ Anki" card: the sentence the word was
+    // selected in (from the page script) and the three answers. The results
+    // are null while a lookup is in flight.
+    private string _lastContext = "";
+    private EnglishLookupResult? _lastEnglish;
+    private ChineseLookupResult? _lastChinese;
+    private TranslationResult? _lastTranslation;
+
     private double? _pendingScrollFraction;
     private double _currentScrollFraction;
     private DateTime _lastScrollSave = DateTime.MinValue;
@@ -92,7 +102,7 @@ public sealed class MainWindow
     private readonly WebKit.WebView _webView;
     private readonly Gtk.ListBox _chapterList;
     private readonly Gtk.Widget _chaptersPanel, _dictPanel;
-    private readonly Gtk.Button _prevBtn, _nextBtn, _themeBtn, _speakBtn;
+    private readonly Gtk.Button _prevBtn, _nextBtn, _themeBtn, _speakBtn, _ankiBtn;
     private readonly Gtk.Button _dualPageBtn, _readAloudBtn, _chaptersBtn, _dictBtn;
     private readonly Gtk.DropDown _fontDrop, _spacingDrop, _marginDrop, _languageDrop;
     private readonly Gtk.Label _zoomLabel, _bookTitleLabel, _statusLabel;
@@ -126,6 +136,7 @@ public sealed class MainWindow
     public MainWindow(Gtk.Application app)
     {
         _settings.Load();
+        _anki.Configure(_settings.Current);
         _bingTransport.Install();
 
         var display = Gdk.Display.GetDefault()!;
@@ -255,9 +266,19 @@ public sealed class MainWindow
         _speakBtn.Sensitive = false;
         _speakBtn.Valign = Gtk.Align.Start;
         _speakBtn.TooltipText = "Read aloud";
-        var termRow = Gtk.Box.New(Gtk.Orientation.Horizontal, 8);
+        // "+ Anki" enables once the lookups have all answered (complete card).
+        _ankiBtn = Button("＋ Anki", OnAnkiClicked);
+        _ankiBtn.Sensitive = false;
+        _ankiBtn.Valign = Gtk.Align.Start;
+        _ankiBtn.TooltipText = "Add this word to Anki (needs Anki running with AnkiConnect)";
+        Gtk.Button ankiSettingsBtn = Button("⚙", () => AnkiSettingsWindow.Show(_window, _settings, _anki));
+        ankiSettingsBtn.Valign = Gtk.Align.Start;
+        ankiSettingsBtn.TooltipText = "Anki Connect settings";
+        var termRow = Gtk.Box.New(Gtk.Orientation.Horizontal, 6);
         termRow.Append(_termLabel);
         termRow.Append(_speakBtn);
+        termRow.Append(_ankiBtn);
+        termRow.Append(ankiSettingsBtn);
 
         _phoneticLabel = Text("", "esl-italic", "esl-accent");
 
@@ -537,13 +558,15 @@ public sealed class MainWindow
     }
 
     /// <summary>The SELECTION bridge: the shared page script posts every new
-    /// selection to the eslSelection handler registered above.</summary>
+    /// selection (packed with the sentence around it) to the eslSelection
+    /// handler registered above.</summary>
     private void OnScriptMessage(WebKit.UserContentManager sender,
                                  WebKit.UserContentManager.ScriptMessageReceivedSignalArgs e)
     {
         if (_book is null) return;
-        string term = ReaderPage.NormalizeSelection(e.Value.ToString() ?? "");
-        if (term.Length > 0) _ = LookupAllSourcesAsync(term);
+        (string raw, string context) = ReaderPage.DecodeSelectionMessage(e.Value.ToString() ?? "");
+        string term = ReaderPage.NormalizeSelection(raw);
+        if (term.Length > 0) _ = LookupAllSourcesAsync(term, context);
     }
 
     /// <summary>Chapter finished loading (the user script has already run):
@@ -697,7 +720,7 @@ public sealed class MainWindow
             _settings.Save();
         }
         if (_lastLookedUpTerm.Length > 0)
-            _ = LookupAllSourcesAsync(_lastLookedUpTerm, speakAloud: false);
+            _ = LookupAllSourcesAsync(_lastLookedUpTerm, _lastContext, speakAloud: false);
     }
 
     private void ApplyLanguage(TranslationLanguage language)
@@ -712,8 +735,10 @@ public sealed class MainWindow
 
     /// <summary>The triple lookup + read-aloud — behaviorally identical to
     /// the other builds (dictionaries skipped for sentence-length
-    /// selections; stale lookups cancelled; refreshes don't re-speak).</summary>
-    private async Task LookupAllSourcesAsync(string term, bool speakAloud = true)
+    /// selections; stale lookups cancelled; refreshes don't re-speak). The
+    /// answers are kept for the "+ Anki" card, which unlocks once all three
+    /// are in.</summary>
+    private async Task LookupAllSourcesAsync(string term, string context, bool speakAloud = true)
     {
         _lookupCts?.Cancel();
         _lookupCts?.Dispose();
@@ -723,7 +748,12 @@ public sealed class MainWindow
         bool dictionarySized = ReaderPage.IsDictionarySized(term);
 
         _lastLookedUpTerm = term;
+        _lastContext = context;
+        _lastEnglish = null;
+        _lastChinese = null;
+        _lastTranslation = null;
         _speakBtn.Sensitive = true;
+        _ankiBtn.Sensitive = false;
         _termLabel.SetText(term);
         _phoneticLabel.SetText("");
         ShowStatus(_englishStatus, dictionarySized
@@ -752,6 +782,7 @@ public sealed class MainWindow
             if (englishTask is not null)
             {
                 EnglishLookupResult r = englishTask.Result;
+                _lastEnglish = r;
                 _phoneticLabel.SetText(r.Phonetic);
                 foreach (EnglishSense sense in r.Senses)
                 {
@@ -767,6 +798,7 @@ public sealed class MainWindow
             if (chineseTask is not null)
             {
                 ChineseLookupResult r = chineseTask.Result;
+                _lastChinese = r;
                 foreach (BingDictionaryEntry entry in r.Entries)
                 {
                     var item = Gtk.Box.New(Gtk.Orientation.Vertical, 1);
@@ -778,10 +810,79 @@ public sealed class MainWindow
                 ShowStatus(_chineseStatus, r.StatusMessage);
             }
             TranslationResult t = translateTask.Result;
+            _lastTranslation = t;
             _translationLabel.SetText(t.TranslatedText);
             ShowStatus(_translationStatus, t.StatusMessage);
+            _ankiBtn.Sensitive = true;
         }
         catch (OperationCanceledException) { /* superseded by a newer selection */ }
+    }
+
+    // ================================================================= Anki
+
+    /// <summary>"+ Anki": send the current word — its three lookups, the
+    /// sentence it was selected in, where in the book it is, and its
+    /// pronunciation clip — to Anki through AnkiConnect.</summary>
+    private async void OnAnkiClicked()
+    {
+        string term = _lastLookedUpTerm;
+        if (term.Length == 0 || _lastTranslation is null) return;
+
+        _ankiBtn.Sensitive = false;
+        SetStatus($"Adding “{term}” to Anki…");
+        try
+        {
+            byte[]? audio = null;
+            try { audio = await _speech.FetchClipAsync(term, CancellationToken.None); }
+            catch { /* no clip (offline) — the card still goes in */ }
+
+            AnkiAddResult result = await _anki.AddAsync(BuildAnkiCard(term, audio), CancellationToken.None);
+            SetStatus(result.AlreadyExisted
+                ? $"“{term}” is already in the Anki deck “{_anki.DeckName}”."
+                : $"Added “{term}” to the Anki deck “{_anki.DeckName}”.");
+        }
+        catch (AnkiConnectException ex)
+        {
+            SetStatus($"Anki: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"Could not add to Anki: {ex.Message}");
+        }
+        finally
+        {
+            // A newer lookup may have started meanwhile; it owns the button then.
+            _ankiBtn.Sensitive = _lastTranslation is not null;
+        }
+    }
+
+    private AnkiCard BuildAnkiCard(string term, byte[]? audio)
+    {
+        string title = _book is null ? ""
+            : _chapterIndex >= 0 && _chapterIndex < _book.Chapters.Count
+                ? $"{_book.Title} — {_book.Chapters[_chapterIndex].Title}"
+                : _book.Title;
+        string url = "";
+        try
+        {
+            if (_settings.Current.LastBookPath.Length > 0)
+                url = new Uri(_settings.Current.LastBookPath).AbsoluteUri;
+        }
+        catch (UriFormatException) { /* odd path — no link on the card */ }
+
+        return new AnkiCard
+        {
+            Text = term,
+            Phonetic = _lastEnglish?.Phonetic ?? "",
+            Context = _lastContext,
+            Translation = _lastTranslation?.TranslatedText ?? "",
+            TargetLanguage = LanguageCatalog.All[(int)_languageDrop.Selected].ShortName,
+            Senses = _lastEnglish?.Senses ?? [],
+            Entries = _lastChinese?.Entries ?? [],
+            Title = title,
+            Url = url,
+            AudioMp3 = audio,
+        };
     }
 
     // ============================================================ text-to-speech
