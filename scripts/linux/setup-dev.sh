@@ -3,9 +3,10 @@
 # scripts/linux/setup-dev.sh — prepare a Linux machine to build and run the
 # GTK front end (src/EslEpubReader.Linux).
 #
-#   1. Native runtime libraries: GTK 4, WebKitGTK 6.0, speech-dispatcher
-#      (read-aloud), GStreamer plugins (WebKit media) — via the distro's
-#      package manager (apt, dnf, pacman or zypper; needs sudo).
+#   1. Native runtime libraries: GTK 4, WebKitGTK 6.0, mpv (plays the
+#      Google Translate read-aloud clips), speech-dispatcher (offline
+#      read-aloud fallback), GStreamer plugins (WebKit media) — via the
+#      distro's package manager (apt, dnf, pacman or zypper; needs sudo).
 #   2. The .NET 10 SDK — skipped if a 10.x SDK is already on PATH or in
 #      ~/.dotnet; otherwise installed per-user into ~/.dotnet with
 #      Microsoft's dotnet-install.sh (no sudo), and added to ~/.bashrc.
@@ -38,24 +39,24 @@ install_system_packages() {
         say "Installing GTK 4 / WebKitGTK 6.0 / speech packages (apt)"
         $sudo apt-get update
         $sudo apt-get install -y \
-            libgtk-4-1 libwebkitgtk-6.0-4 \
+            libgtk-4-1 libwebkitgtk-6.0-4 mpv \
             speech-dispatcher speech-dispatcher-espeak-ng \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             ca-certificates curl
     elif command -v dnf >/dev/null; then
         say "Installing GTK 4 / WebKitGTK 6.0 / speech packages (dnf)"
-        $sudo dnf install -y gtk4 webkitgtk6.0 speech-dispatcher espeak-ng \
+        $sudo dnf install -y gtk4 webkitgtk6.0 mpv speech-dispatcher espeak-ng \
             gstreamer1-plugins-base gstreamer1-plugins-good ca-certificates curl
     elif command -v pacman >/dev/null; then
         say "Installing GTK 4 / WebKitGTK 6.0 / speech packages (pacman)"
-        $sudo pacman -S --needed --noconfirm gtk4 webkitgtk-6.0 speech-dispatcher espeak-ng \
+        $sudo pacman -S --needed --noconfirm gtk4 webkitgtk-6.0 mpv speech-dispatcher espeak-ng \
             gst-plugins-base gst-plugins-good ca-certificates curl
     elif command -v zypper >/dev/null; then
         say "Installing GTK 4 / WebKitGTK 6.0 / speech packages (zypper)"
-        $sudo zypper install -y libgtk-4-1 libwebkitgtk-6_0-4 speech-dispatcher espeak-ng \
+        $sudo zypper install -y libgtk-4-1 libwebkitgtk-6_0-4 mpv speech-dispatcher espeak-ng \
             gstreamer-plugins-base gstreamer-plugins-good ca-certificates curl
     else
-        warn "unknown package manager — install GTK 4, WebKitGTK 6.0 and speech-dispatcher yourself"
+        warn "unknown package manager — install GTK 4, WebKitGTK 6.0, mpv and speech-dispatcher yourself"
     fi
 }
 

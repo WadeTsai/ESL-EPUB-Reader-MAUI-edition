@@ -12,8 +12,11 @@
 // injected selection/pagination script, the reader stylesheet builder, the
 // base64 style-injection wrapper, and selection normalization.
 //
-// The injected JS is kept //-comment-free and ';'-terminated because the
-// MAUI front end flattens it to one line before EvaluateJavaScriptAsync.
+// The injected JS is kept //-comment-free, ';'-terminated AND
+// backslash-free: the MAUI front end flattens it to one line and its
+// EvaluateJavaScriptAsync wraps it in eval('…'), where a backslash that
+// does not precede a quote is silently dropped (a regex \s becomes s).
+// Whitespace/quote classes are therefore built with String.fromCharCode.
 // ============================================================================
 
 using System.Globalization;
@@ -86,9 +89,13 @@ public static class ReaderPage
     /// <summary>
     /// The injected page script — the same behavior as the WinUI app's
     /// SelectionWatcherScript, expressed bridge-portably:
-    ///   * selection reporting (mouseup/dblclick/Shift+arrows): posted to the
+    ///   * selection reporting (mouseup/dblclick/Shift+arrows): the selection
+    ///     plus the SENTENCE it sits in (the Anki card's context), packed by
+    ///     pack() as "base64(selection).base64(sentence)" — base64 travels
+    ///     intact through every bridge's escaping — and posted to the
     ///     eslSelection message handler when the host registered one,
-    ///     otherwise queued in window.__eslPendingSel for native polling;
+    ///     otherwise queued for native polling via window.__eslTake();
+    ///     DecodeSelectionMessage unpacks it on the native side;
     ///   * strict dual-page pagination: flipPage snaps to whole page pairs;
     ///     wheel = exactly one pair per gesture; PgDn/PgUp/Space/arrows/
     ///     Home/End; resize re-aligns to the remembered fraction and forces
@@ -102,15 +109,47 @@ public static class ReaderPage
         (function () {
             if (window.__eslInit) return; window.__eslInit = true;
             var last = '';
+            function b64(t) { return window.btoa(unescape(encodeURIComponent(t))); }
+            function pack(s, c) { try { return b64(s) + '.' + b64(c); } catch (e) { return b64(s); } }
+            var ws = new RegExp('[ ' + String.fromCharCode(9, 10, 13, 160) + ']+', 'g');
+            var closers = String.fromCharCode(8221, 8217, 34, 39, 41, 93);
+            function sentenceAround(sel, s) {
+                try {
+                    if (!sel || !sel.rangeCount) return '';
+                    var n = sel.getRangeAt(0).commonAncestorContainer;
+                    if (n.nodeType !== 1) n = n.parentNode;
+                    var b = n && n.closest ? n.closest('p,li,blockquote,dd,dt,td,th,h1,h2,h3,h4,h5,h6,figcaption,div,section,article,body') : n;
+                    var t = String(((b || n) && (b || n).textContent) || '').replace(ws, ' ').trim();
+                    s = s.replace(ws, ' ').replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
+                    if (!t || !s) return '';
+                    var i = t.indexOf(s);
+                    if (i < 0) return t.length <= 400 ? t : '';
+                    var a = i, z = i + s.length;
+                    while (a > 0 && !(/[.!?]/.test(t.charAt(a - 1)) && t.charAt(a) === ' ')) a--;
+                    while (z < t.length && !(/[.!?]/.test(t.charAt(z)) && (z + 1 >= t.length || t.charAt(z + 1) === ' ' || closers.indexOf(t.charAt(z + 1)) >= 0))) z++;
+                    z = Math.min(t.length, z + 1);
+                    while (z < t.length && closers.indexOf(t.charAt(z)) >= 0) z++;
+                    var c = t.slice(a, z).trim();
+                    return c.length <= 600 ? c : '';
+                } catch (e) { return ''; }
+            }
             function report() {
-                var s = window.getSelection ? String(window.getSelection()) : '';
-                s = s.trim();
+                var sel = window.getSelection ? window.getSelection() : null;
+                var s = sel ? String(sel).trim() : '';
                 if (!s) { last = ''; return; }
                 if (s === last || s.length > 500) return;
                 last = s;
-                window.__eslPendingSel = s;
-                try { window.webkit.messageHandlers.eslSelection.postMessage(s); window.__eslPendingSel = ''; } catch (e) { }
+                var c = sentenceAround(sel, s);
+                window.__eslPendingSel = s; window.__eslPendingCtx = c;
+                try { window.webkit.messageHandlers.eslSelection.postMessage(pack(s, c)); window.__eslPendingSel = ''; window.__eslPendingCtx = ''; } catch (e) { }
             }
+            window.__eslTake = function () {
+                var s = window.__eslPendingSel || '';
+                if (!s) return '';
+                var c = window.__eslPendingCtx || '';
+                window.__eslPendingSel = ''; window.__eslPendingCtx = '';
+                return pack(s, c);
+            };
             document.addEventListener('mouseup', function () { setTimeout(report, 0); });
             document.addEventListener('dblclick', function () { setTimeout(report, 0); });
             document.addEventListener('keyup', function (e) {
@@ -269,6 +308,26 @@ public static class ReaderPage
             $"(document.head || document.documentElement).appendChild(s); }} " +
             $"s.textContent = decodeURIComponent(escape(window.atob('{cssB64}'))); " +
             $"return 'S-OK'; }} catch(e) {{ return 'S-ERR:'+String(e); }} }})();";
+    }
+
+    /// <summary>Unpack a selection message from the page script
+    /// ("base64(selection).base64(sentence)", see SelectionWatcherScript)
+    /// into the raw selection and the sentence around it. Tolerates the
+    /// surrounding quotes some EvaluateJavaScript bridges add; anything
+    /// undecodable comes back as "".</summary>
+    public static (string Text, string Context) DecodeSelectionMessage(string packed)
+    {
+        packed = packed.Trim().Trim('"', '\'', ' ');
+        int dot = packed.IndexOf('.');
+        string text = Decode(dot < 0 ? packed : packed[..dot]);
+        string context = dot < 0 ? "" : Decode(packed[(dot + 1)..]);
+        return (text, context);
+
+        static string Decode(string b64)
+        {
+            try { return Encoding.UTF8.GetString(Convert.FromBase64String(b64)); }
+            catch (FormatException) { return ""; }
+        }
     }
 
     /// <summary>Collapse whitespace, trim surrounding punctuation, and reject

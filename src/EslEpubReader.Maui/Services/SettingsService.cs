@@ -92,6 +92,27 @@ public sealed class ReaderSettings
     /// built-in defaults (2.5em margin, 40em column). Unknown values fall
     /// back to the default selection at load time.</summary>
     public string ReaderPageMargin { get; set; } = "";
+
+    // ----- Anki Connect (the "+ Anki" button in the dictionary panel) -------
+    // See Services/AnkiConnectService.cs. Edited in the Anki settings dialog;
+    // empty strings fall back to the service defaults at configure time.
+
+    /// <summary>AnkiConnect endpoint, normally http://127.0.0.1:8765.</summary>
+    public string AnkiConnectUrl { get; set; } = AnkiConnectService.DefaultUrl;
+
+    /// <summary>The add-on's "apiKey" config value; "" when it has none.</summary>
+    public string AnkiConnectKey { get; set; } = "";
+
+    /// <summary>Deck the cards go to (created when missing).</summary>
+    public string AnkiDeckName { get; set; } = AnkiConnectService.DefaultDeck;
+
+    /// <summary>Note type — "ESL EPUB Reader Cloze" by default, a cloze type
+    /// created when missing; any existing note type works too (fields are
+    /// matched by name, see AnkiConnectService).</summary>
+    public string AnkiModelName { get; set; } = AnkiConnectService.DefaultModel;
+
+    /// <summary>Space-separated tags put on every card.</summary>
+    public string AnkiTags { get; set; } = AnkiConnectService.DefaultTags;
 }
 
 /// <summary>Loads and saves ReaderSettings. All failures are swallowed by
