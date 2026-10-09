@@ -18,8 +18,20 @@
 //        concatenate the results, prefixing every sense with the word it
 //        belongs to, so the reader can still decode the phrase word by word.
 //
+// FALLBACK — WIKTIONARY:
+//   dictionaryapi.dev is a volunteer-run service and does go down (in 2026
+//   it spent long stretches answering HTTP 522 after ~20 s). When it fails
+//   at the TRANSPORT level (timeout, 5xx, bad JSON) it is skipped for
+//   PrimaryCooldown and lookups go to Wiktionary's free REST API instead:
+//
+//       https://en.wiktionary.org/api/rest_v1/page/definition/{Title}
+//
+//   Same information minus IPA and synonyms; its definitions arrive as
+//   HTML fragments, which are flattened to plain text.
+//
 // RESILIENCE:
-//   * 8-second timeout so a dead network never hangs the UI.
+//   * 8-second timeout so a dead network never hangs the UI (5 seconds for
+//     the primary API, so a hanging primary still leaves time to fall back).
 //   * Every failure path returns a result object with a human-readable
 //     StatusMessage instead of throwing — the side panel always has
 //     something sensible to display.
@@ -37,6 +49,14 @@ public sealed class EnglishDictionaryService
     /// <summary>Base endpoint; the looked-up term is appended URL-escaped.</summary>
     private const string ApiBase = "https://api.dictionaryapi.dev/api/v2/entries/en/";
 
+    /// <summary>Fallback endpoint (see the file comment).</summary>
+    private const string WiktionaryBase = "https://en.wiktionary.org/api/rest_v1/page/definition/";
+
+    /// <summary>How long to stop trying dictionaryapi.dev after it failed.</summary>
+    private static readonly TimeSpan PrimaryCooldown = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan PrimaryTimeout = TimeSpan.FromSeconds(5);
+    private static DateTime _primaryDownUntil = DateTime.MinValue;
+
     /// <summary>Cap on senses per lookup so one word ("set" has dozens of
     /// meanings) cannot flood the panel and bury the Chinese results.</summary>
     private const int MaxSenses = 12;
@@ -46,10 +66,16 @@ public sealed class EnglishDictionaryService
     /// HttpClient per request is a well-known anti-pattern (socket
     /// exhaustion); a single static instance reuses connections.
     /// </summary>
-    private static readonly HttpClient Http = new()
+    private static readonly HttpClient Http = CreateClient();
+
+    private static HttpClient CreateClient()
     {
-        Timeout = TimeSpan.FromSeconds(8),
-    };
+        var client = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
+        // Wikimedia's API policy asks every client to identify itself.
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(
+            "EslEpubReader/1.1 (https://github.com/WadeTsai/ESL-EPUB-Reader-MAUI-edition)");
+        return client;
+    }
 
     /// <summary>
     /// Tiny in-memory cache: term -> result. Readers often re-select the
@@ -153,10 +179,35 @@ public sealed class EnglishDictionaryService
     }
 
     /// <summary>
-    /// One raw API call. Returns null for "word not found" (HTTP 404) so the
-    /// caller can distinguish that from transport errors (which throw).
+    /// One lookup: dictionaryapi.dev, or Wiktionary while the primary is in
+    /// its cooldown (see the file comment). Returns null for "word not
+    /// found"; transport errors of the LAST source tried throw.
     /// </summary>
     private static async Task<EnglishLookupResult?> QueryApiAsync(string term, CancellationToken ct)
+    {
+        if (DateTime.UtcNow >= _primaryDownUntil)
+        {
+            using var primaryCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            primaryCts.CancelAfter(PrimaryTimeout);
+            try
+            {
+                return await QueryDictionaryApiAsync(term, primaryCts.Token);
+            }
+            catch (Exception ex) when (!ct.IsCancellationRequested &&
+                                       ex is HttpRequestException or TaskCanceledException or JsonException)
+            {
+                _primaryDownUntil = DateTime.UtcNow + PrimaryCooldown;
+            }
+        }
+        return await QueryWiktionaryAsync(term, ct);
+    }
+
+    /// <summary>
+    /// One raw dictionaryapi.dev call. Returns null for "word not found"
+    /// (HTTP 404) so the caller can distinguish that from transport errors
+    /// (which throw).
+    /// </summary>
+    private static async Task<EnglishLookupResult?> QueryDictionaryApiAsync(string term, CancellationToken ct)
     {
         using HttpResponseMessage response =
             await Http.GetAsync(ApiBase + Uri.EscapeDataString(term), ct);
@@ -265,5 +316,89 @@ public sealed class EnglishDictionaryService
             Phonetic = phonetic,
             Senses = senses,
         };
+    }
+
+    /// <summary>
+    /// One Wiktionary call. Titles are case-sensitive, so a capitalized
+    /// selection ("Ingenious" at a sentence start) retries in lower case.
+    /// Returns null when neither spelling has an English entry.
+    /// </summary>
+    private static async Task<EnglishLookupResult?> QueryWiktionaryAsync(string term, CancellationToken ct)
+    {
+        EnglishLookupResult? result = await QueryWiktionaryTitleAsync(term, term, ct);
+        string lower = term.ToLowerInvariant();
+        if (result is null && lower != term)
+            result = await QueryWiktionaryTitleAsync(term, lower, ct);
+        return result;
+    }
+
+    private static async Task<EnglishLookupResult?> QueryWiktionaryTitleAsync(
+        string term, string title, CancellationToken ct)
+    {
+        using HttpResponseMessage response = await Http.GetAsync(
+            WiktionaryBase + Uri.EscapeDataString(title.Replace(' ', '_')), ct);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        response.EnsureSuccessStatusCode();
+
+        // Response shape (abridged): { "en": [ { "partOfSpeech": "Adjective",
+        //   "definitions": [ { "definition": "<html>", "examples": ["<html>"] } ] } ],
+        //   "fr": [...], ... } — only the English ("en") block is used.
+        await using Stream stream = await response.Content.ReadAsStreamAsync(ct);
+        using JsonDocument doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct);
+
+        if (!doc.RootElement.TryGetProperty("en", out JsonElement english) ||
+            english.ValueKind != JsonValueKind.Array) return null;
+
+        var senses = new List<EnglishSense>();
+        foreach (JsonElement usage in english.EnumerateArray())
+        {
+            string pos = usage.TryGetProperty("partOfSpeech", out JsonElement posEl) &&
+                         posEl.ValueKind == JsonValueKind.String
+                         ? (posEl.GetString() ?? "").ToLowerInvariant() : "";
+
+            if (!usage.TryGetProperty("definitions", out JsonElement defs) ||
+                defs.ValueKind != JsonValueKind.Array) continue;
+
+            foreach (JsonElement def in defs.EnumerateArray())
+            {
+                if (senses.Count >= MaxSenses) break;
+
+                string definition = def.TryGetProperty("definition", out JsonElement d) &&
+                                    d.ValueKind == JsonValueKind.String
+                                    ? HtmlToText(d.GetString()) : "";
+                if (definition.Length == 0) continue;
+
+                string example = "";
+                if (def.TryGetProperty("examples", out JsonElement examples) &&
+                    examples.ValueKind == JsonValueKind.Array)
+                {
+                    example = examples.EnumerateArray()
+                        .Where(e => e.ValueKind == JsonValueKind.String)
+                        .Select(e => HtmlToText(e.GetString()))
+                        .FirstOrDefault(e => e.Length > 0) ?? "";
+                }
+
+                senses.Add(new EnglishSense
+                {
+                    PartOfSpeech = pos,
+                    Definition = definition,
+                    Example = example,
+                });
+            }
+        }
+
+        if (senses.Count == 0) return null;
+        return new EnglishLookupResult { Term = term, Senses = senses };
+    }
+
+    /// <summary>Flatten a Wiktionary HTML fragment to plain text.</summary>
+    private static string HtmlToText(string? html)
+    {
+        if (string.IsNullOrEmpty(html)) return "";
+        string text = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", "");
+        text = WebUtility.HtmlDecode(text);
+        text = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        // Stripped inline tags leave "word ;" gaps before punctuation.
+        return System.Text.RegularExpressions.Regex.Replace(text, @"\s+([;:,.!?)])", "$1");
     }
 }

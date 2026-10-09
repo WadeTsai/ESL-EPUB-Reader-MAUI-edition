@@ -24,10 +24,14 @@
 // TRADITIONAL CHINESE SPECIAL CASE (the app's default!):
 //   tlookupv3 supports zh-Hans but NOT zh-Hant. For Traditional targets the
 //   lookup is performed in zh-Hans and the returned terms are converted to
-//   Traditional characters with the Windows built-in converter
-//   (kernel32!LCMapStringEx, LCMAP_TRADITIONAL_CHINESE) — no mapping tables
-//   to ship, and the per-character conversion this performs is the same
-//   approach common converters use.
+//   Traditional characters:
+//     * on Windows with the built-in converter (kernel32!LCMapStringEx,
+//       LCMAP_TRADITIONAL_CHINESE) — offline, no mapping tables to ship;
+//     * elsewhere (Linux, macOS) with ONE extra Bing Translator call,
+//       zh-Hans → zh-Hant, carrying every term of the lookup at once (one
+//       per line). This also localizes vocabulary (软件 → 軟體), not just
+//       characters. If that call fails or its lines don't line up with the
+//       input, the Simplified terms are shown rather than failing the lookup.
 // ============================================================================
 
 using System.Net.Http;
@@ -116,7 +120,8 @@ public sealed partial class BingDictionaryService
                     string target = t.TryGetProperty("displayTarget", out JsonElement dt) &&
                                     dt.ValueKind == JsonValueKind.String ? dt.GetString() ?? "" : "";
                     if (target.Length == 0) continue;
-                    if (convertToTraditional) target = ToTraditionalChinese(target);
+                    if (convertToTraditional && OperatingSystem.IsWindows())
+                        target = ToTraditionalChinese(target);
 
                     // posTag arrives UPPERCASE ("NOUN") — lowercase it to
                     // match the English–English section's badge style.
@@ -144,6 +149,9 @@ public sealed partial class BingDictionaryService
                     });
                 }
             }
+
+            if (convertToTraditional && !OperatingSystem.IsWindows() && entries.Count > 0)
+                entries = await ToTraditionalViaTranslatorAsync(entries, ct);
 
             ChineseLookupResult result = entries.Count > 0
                 ? new ChineseLookupResult { Term = term, Entries = entries }
@@ -174,6 +182,57 @@ public sealed partial class BingDictionaryService
 
     // ------------------------------------------------ zh-Hans → zh-Hant
 
+    /// <summary>
+    /// Non-Windows conversion (see the class comment): translate all entry
+    /// terms zh-Hans → zh-Hant in one Bing Translator request, one term per
+    /// line. Returns the entries unchanged when the call fails or the
+    /// answer's line count does not match — never worse than Simplified.
+    /// </summary>
+    private static async Task<List<BingDictionaryEntry>> ToTraditionalViaTranslatorAsync(
+        List<BingDictionaryEntry> entries, CancellationToken ct)
+    {
+        try
+        {
+            using JsonDocument doc = await BingSession.PostAsync("ttranslatev3",
+                new Dictionary<string, string>
+                {
+                    ["fromLang"] = "zh-Hans",
+                    ["text"] = string.Join('\n', entries.Select(e => e.Term)),
+                    ["to"] = "zh-Hant",
+                }, ct);
+
+            JsonElement root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Array || root.GetArrayLength() == 0 ||
+                !root[0].TryGetProperty("translations", out JsonElement translations) ||
+                translations.ValueKind != JsonValueKind.Array || translations.GetArrayLength() == 0 ||
+                !translations[0].TryGetProperty("text", out JsonElement text) ||
+                text.ValueKind != JsonValueKind.String)
+                return entries;
+
+            string[] lines = (text.GetString() ?? "").Split('\n')
+                .Select(l => l.Trim()).ToArray();
+            if (lines.Length != entries.Count || lines.Any(l => l.Length == 0))
+                return entries;
+
+            // Distinct Simplified words can meet in one Traditional word
+            // (网络/网路 → 網路); keep the first, highest-ranked of each.
+            return entries.Select((e, i) => new BingDictionaryEntry
+            {
+                PartOfSpeech = e.PartOfSpeech,
+                Term = lines[i],
+                BackTranslations = e.BackTranslations,
+            }).DistinctBy(e => (e.PartOfSpeech, e.Term)).ToList();
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return entries;
+        }
+    }
+
     /// <summary>Windows NLS mapping flag: convert Chinese characters to
     /// their Traditional forms (per-character).</summary>
     private const uint LCMAP_TRADITIONAL_CHINESE = 0x04000000;
@@ -195,10 +254,8 @@ public sealed partial class BingDictionaryService
     {
         if (simplified.Length == 0) return simplified;
 
-        // LCMapStringEx is a WINDOWS API. On other platforms (the Mac
-        // Catalyst build) fall back to returning the Simplified form —
-        // still perfectly readable for most Traditional-script users; a
-        // portable conversion table could replace this later.
+        // LCMapStringEx is a WINDOWS API; other platforms convert through
+        // ToTraditionalViaTranslatorAsync instead and never get here.
         if (!OperatingSystem.IsWindows()) return simplified;
         var buffer = new char[simplified.Length * 2];   // headroom; 1:1 in practice
         int written = LCMapStringEx(

@@ -99,11 +99,21 @@ public sealed class ReaderSettings
 /// the worst outcome is simply starting fresh.</summary>
 public sealed class SettingsService
 {
+#if ESL_LINUX
+    /// <summary>settings.json under the XDG config folder
+    /// ($XDG_CONFIG_HOME/EslEpubReader, normally ~/.config/EslEpubReader) —
+    /// the Linux (GTK) build has no MAUI FileSystem to ask.</summary>
+    private static string SettingsFilePath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData,
+                                  Environment.SpecialFolderOption.Create),
+        "EslEpubReader", "settings.json");
+#else
     /// <summary>settings.json in the MAUI cross-platform app-data folder
     /// (%LOCALAPPDATA%-equivalent on Windows, Library/Application Support on
     /// macOS) — the one place BOTH platform builds can persist state.</summary>
     private static string SettingsFilePath => Path.Combine(
         Microsoft.Maui.Storage.FileSystem.AppDataDirectory, "settings.json");
+#endif
 
     /// <summary>Indented JSON so users can inspect/edit the file by hand.</summary>
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };

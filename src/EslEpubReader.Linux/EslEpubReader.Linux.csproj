@@ -1,0 +1,59 @@
+<!--
+  EslEpubReader.Linux.csproj
+  ==========================
+  The LINUX front end of the ESL EPUB Reader. .NET MAUI has no Linux
+  target, so this head renders with GTK 4 + WebKitGTK 6.0 through the
+  GirCore bindings instead — a plain net10.0 console-style app with no
+  workloads, buildable on any OS and runnable wherever GTK 4 and
+  WebKitGTK 6.0 are installed.
+
+  SHARED CODE: Services/ and Models/ are compiled straight from the MAUI
+  project (linked, not copied), so both front ends run the very same ePub
+  parser, Bing/dictionary lookups, settings model and reader page script.
+  ESL_LINUX switches the one MAUI-only call (the settings folder).
+
+  Build / run (after scripts/linux/setup-dev.sh), from the repo root:
+      scripts/linux/run.sh
+      dotnet publish src/EslEpubReader.Linux -c Release
+-->
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>EslEpubReader</RootNamespace>
+    <AssemblyName>eslepubreader</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>14.0</LangVersion>
+    <DefineConstants>$(DefineConstants);ESL_LINUX</DefineConstants>
+
+    <Product>ESL EPUB Reader</Product>
+    <Version>1.1.0</Version>
+
+    <!-- Publish defaults: a self-contained linux-x64 folder that runs on a
+         machine without the .NET runtime (GTK/WebKitGTK still come from
+         the distro). -->
+    <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">linux-x64</RuntimeIdentifier>
+    <SelfContained Condition="'$(_IsPublishing)' == 'true'">true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\EslEpubReader.Maui\Services\**\*.cs" Link="Shared\Services\%(RecursiveDir)%(Filename)%(Extension)" />
+    <Compile Include="..\EslEpubReader.Maui\Models\**\*.cs" Link="Shared\Models\%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GirCore.Gtk-4.0" Version="0.8.1" />
+    <PackageReference Include="GirCore.WebKit-6.0" Version="0.8.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Icon in freedesktop layout next to the binary, so dev runs find it
+         (MainWindow adds <app>/icons to the icon theme search path). -->
+    <None Include="Resources\com.wadetsai.eslepubreader.svg"
+          Link="icons\hicolor\scalable\apps\com.wadetsai.eslepubreader.svg"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

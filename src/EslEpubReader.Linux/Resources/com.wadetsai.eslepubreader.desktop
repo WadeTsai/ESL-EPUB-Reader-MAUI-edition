@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ESL EPUB Reader
+GenericName=ePub Reader
+Comment=Read ePub books with instant dictionary and translation lookups
+Exec=eslepubreader %f
+Icon=com.wadetsai.eslepubreader
+Terminal=false
+Categories=Office;Viewer;
+MimeType=application/epub+zip;
+Keywords=epub;ebook;dictionary;translate;english;
